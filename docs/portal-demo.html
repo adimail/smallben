@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>smallben</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #171513;
+    --panel: #1f1c19;
+    --panel-raised: #262220;
+    --line: #322d29;
+    --text: #efe9e0;
+    --muted: #8c8478;
+    --muted-dim: #5e584f;
+    --amber: #e8a33d;
+    --amber-dim: #4a3a20;
+    --green: #7fc99a;
+    --green-dim: #22301f;
+    --radius: 3px;
+  }
+
+  *{ box-sizing: border-box; }
+
+  body{
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 14px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection{ background: var(--amber-dim); color: var(--amber); }
+
+  a{ color: inherit; }
+
+  .wrap{
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 0 24px 120px;
+  }
+
+  /* ---------- top bar ---------- */
+
+  .topbar{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 22px 0;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 0;
+  }
+
+  .brand{
+    font-family: 'Fraunces', serif;
+    font-size: 20px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+  }
+
+  .device-id{
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .status{
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .dot{
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 0 3px var(--green-dim);
+  }
+
+  /* ---------- live section (hero) ---------- */
+
+  .live{
+    padding: 56px 0 48px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .live-idle{
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 14px;
+  }
+
+  .live-eyebrow{
+    color: var(--muted-dim);
+    font-size: 12px;
+  }
+
+  .live-headline{
+    font-family: 'Fraunces', serif;
+    font-size: 28px;
+    font-weight: 500;
+    line-height: 1.25;
+    max-width: 480px;
+  }
+
+  .ring{
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    border: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    margin-bottom: 6px;
+  }
+  .ring::before{
+    content:'';
+    position: absolute;
+    inset: -1px;
+    border-radius: 50%;
+    border: 1px solid var(--muted-dim);
+    opacity: 0.35;
+  }
+  .ring-core{
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--muted-dim);
+  }
+  .ring.hot{ border-color: var(--amber-dim); }
+  .ring.hot::before{
+    border-color: var(--amber);
+    animation: pulse 1.6s ease-out infinite;
+  }
+  .ring.hot .ring-core{ background: var(--amber); }
+
+  @keyframes pulse{
+    0%{ transform: scale(1); opacity: 0.7; }
+    100%{ transform: scale(1.9); opacity: 0; }
+  }
+
+  .btn-sim{
+    margin-top: 8px;
+    background: none;
+    border: 1px solid var(--line);
+    color: var(--muted);
+    padding: 9px 14px;
+    font-family: inherit;
+    font-size: 12px;
+    border-radius: var(--radius);
+    cursor: pointer;
+  }
+  .btn-sim:hover{ border-color: var(--muted-dim); color: var(--text); }
+
+  /* --- detected state --- */
+
+  .live-hit{ display: none; }
+  .live-hit.show{ display: block; }
+  .live-idle.hide{ display: none; }
+
+  .disc-id{
+    font-family: 'Fraunces', serif;
+    font-size: 30px;
+    font-weight: 500;
+    color: var(--amber);
+    letter-spacing: 0.01em;
+  }
+
+  .live-sub{
+    color: var(--muted);
+    margin-top: 4px;
+    font-size: 13px;
+  }
+
+  .map-choice{
+    display: flex;
+    gap: 10px;
+    margin-top: 22px;
+    flex-wrap: wrap;
+  }
+
+  .map-tab{
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--muted);
+    padding: 8px 12px;
+    border-radius: var(--radius);
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .map-tab.active{
+    border-color: var(--amber-dim);
+    color: var(--amber);
+    background: rgba(232,163,61,0.06);
+  }
+
+  .map-list{
+    margin-top: 14px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: hidden;
+    max-width: 420px;
+  }
+  .map-row{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--line);
+    cursor: pointer;
+  }
+  .map-row:last-child{ border-bottom: none; }
+  .map-row:hover{ background: var(--panel-raised); }
+  .map-row-name{ color: var(--text); }
+  .map-row-meta{ color: var(--muted-dim); font-size: 12px; }
+
+  .live-actions{
+    margin-top: 16px;
+    display: flex;
+    gap: 14px;
+  }
+  .link-btn{
+    background: none;
+    border: none;
+    color: var(--muted);
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    padding: 0;
+    text-decoration: underline;
+    text-decoration-color: var(--line);
+    text-underline-offset: 3px;
+  }
+  .link-btn:hover{ color: var(--text); }
+
+  .saved-banner{
+    display: none;
+    margin-top: 16px;
+    color: var(--green);
+    font-size: 13px;
+  }
+  .saved-banner.show{ display: block; }
+
+  /* ---------- generic section ---------- */
+
+  section.block{
+    padding: 40px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  section.block:last-of-type{ border-bottom: none; }
+
+  .block-head{
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 20px;
+  }
+
+  .block-title{
+    font-family: 'Fraunces', serif;
+    font-size: 19px;
+    font-weight: 600;
+  }
+
+  .block-count{
+    color: var(--muted-dim);
+    font-size: 12px;
+  }
+
+  /* ---------- library rows ---------- */
+
+  .track{
+    display: grid;
+    grid-template-columns: 22px 1fr auto auto;
+    gap: 14px;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .track:last-child{ border-bottom: none; }
+  .track-num{ color: var(--muted-dim); font-size: 12px; }
+  .track-name{ color: var(--text); }
+  .track-file{ color: var(--muted-dim); font-size: 11px; display: block; margin-top: 2px; }
+  .track-len{ color: var(--muted); font-size: 12px; }
+  .track-used{
+    font-size: 11px;
+    color: var(--muted-dim);
+    border: 1px solid var(--line);
+    padding: 2px 7px;
+    border-radius: var(--radius);
+    white-space: nowrap;
+  }
+
+  /* ---------- playlists ---------- */
+
+  .playlist{
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    margin-bottom: 10px;
+  }
+  .playlist:last-child{ margin-bottom: 0; }
+  .playlist-head{
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 14px;
+    cursor: pointer;
+  }
+  .playlist-head:hover{ background: var(--panel-raised); }
+  .playlist-name{ color: var(--text); }
+  .playlist-meta{ color: var(--muted-dim); font-size: 12px; }
+  .playlist-body{
+    display: none;
+    padding: 0 14px 12px 14px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .playlist.open .playlist-body{ display: block; }
+  .playlist-body ol{ margin: 6px 0 0; padding-left: 18px; }
+  .playlist-body li{ padding: 3px 0; }
+
+  .new-playlist{
+    margin-top: 14px;
+    color: var(--muted-dim);
+    font-size: 12px;
+    border: 1px dashed var(--line);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    text-align: center;
+    cursor: pointer;
+  }
+  .new-playlist:hover{ color: var(--muted); border-color: var(--muted-dim); }
+
+  /* ---------- discs table ---------- */
+
+  .disc-table{ width: 100%; border-collapse: collapse; }
+  .disc-table th{
+    text-align: left;
+    font-weight: 400;
+    color: var(--muted-dim);
+    font-size: 11px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--line);
+  }
+  .disc-table td{
+    padding: 12px 0;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+  .disc-table tr:last-child td{ border-bottom: none; }
+  .disc-table td.id{ color: var(--text); white-space: nowrap; padding-right: 16px; }
+  .disc-mapped{ color: var(--text); }
+  .disc-type{ color: var(--muted-dim); font-size: 11px; }
+  .disc-empty{ color: var(--muted-dim); font-style: normal; }
+  .disc-seen{ color: var(--muted); font-size: 12px; white-space: nowrap; text-align: right; }
+
+  footer{
+    padding: 30px 0 0;
+    color: var(--muted-dim);
+    font-size: 11px;
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <div class="topbar">
+    <div>
+      <div class="brand">Smallben</div>
+    </div>
+    <div class="status">
+      <span class="dot"></span>
+      <span>online</span>
+    </div>
+  </div>
+
+  <!-- LIVE / HERO -->
+  <div class="live">
+
+    <div class="live-idle" id="liveIdle">
+      <div class="ring" id="ring"><div class="ring-core"></div></div>
+      <div class="live-eyebrow">reader status</div>
+      <div class="live-headline">Waiting for a disc. Place one near the reader to map it or check what's on it.</div>
+      <button class="btn-sim" id="simBtn">simulate a disc tap</button>
+    </div>
+
+    <div class="live-hit" id="liveHit">
+      <div class="live-eyebrow">disc detected</div>
+      <div class="disc-id" id="hitId">3F:A2:11:9C</div>
+      <div class="live-sub" id="hitSub">Not mapped yet. Choose what this disc should play.</div>
+
+      <div class="map-choice">
+        <button class="map-tab active" data-mode="song">a song</button>
+        <button class="map-tab" data-mode="playlist">a playlist</button>
+      </div>
+
+      <div class="map-list" id="mapListSong">
+        <div class="map-row" data-name="Fourth of July"><span class="map-row-name">Fourth of July</span><span class="map-row-meta">3:42</span></div>
+        <div class="map-row" data-name="Holocene"><span class="map-row-name">Holocene</span><span class="map-row-meta">5:37</span></div>
+        <div class="map-row" data-name="Skinny Love"><span class="map-row-name">Skinny Love</span><span class="map-row-meta">4:01</span></div>
+        <div class="map-row" data-name="Motion Sickness"><span class="map-row-name">Motion Sickness</span><span class="map-row-meta">3:29</span></div>
+      </div>
+
+      <div class="map-list" id="mapListPlaylist" style="display:none;">
+        <div class="map-row" data-name="Rainy Sundays"><span class="map-row-name">Rainy Sundays</span><span class="map-row-meta">6 tracks</span></div>
+        <div class="map-row" data-name="Drive North"><span class="map-row-name">Drive North</span><span class="map-row-meta">9 tracks</span></div>
+        <div class="map-row" data-name="Kitchen, 9am"><span class="map-row-name">Kitchen, 9am</span><span class="map-row-meta">4 tracks</span></div>
+      </div>
+
+      <div class="saved-banner" id="savedBanner">Saved. This disc now plays "<span id="savedName"></span>."</div>
+
+      <div class="live-actions">
+        <button class="link-btn" id="clearBtn">clear this disc's mapping</button>
+        <button class="link-btn" id="doneBtn">done</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- LIBRARY -->
+  <section class="block">
+    <div class="block-head">
+      <div class="block-title">Library</div>
+      <div class="block-count">12 tracks on sd card</div>
+    </div>
+
+    <div class="track">
+      <span class="track-num">01</span>
+      <span><span class="track-name">Fourth of July</span><span class="track-file">004_fourth_of_july.mp3</span></span>
+      <span class="track-len">3:42</span>
+      <span class="track-used">on 1 disc</span>
+    </div>
+    <div class="track">
+      <span class="track-num">02</span>
+      <span><span class="track-name">Holocene</span><span class="track-file">002_holocene.mp3</span></span>
+      <span class="track-len">5:37</span>
+      <span class="track-used">on 2 discs</span>
+    </div>
+    <div class="track">
+      <span class="track-num">03</span>
+      <span><span class="track-name">Skinny Love</span><span class="track-file">009_skinny_love.mp3</span></span>
+      <span class="track-len">4:01</span>
+      <span class="track-used">unused</span>
+    </div>
+    <div class="track">
+      <span class="track-num">04</span>
+      <span><span class="track-name">Motion Sickness</span><span class="track-file">011_motion_sickness.mp3</span></span>
+      <span class="track-len">3:29</span>
+      <span class="track-used">unused</span>
+    </div>
+    <div class="track">
+      <span class="track-num">05</span>
+      <span><span class="track-name">Re: Stacks</span><span class="track-file">006_re_stacks.mp3</span></span>
+      <span class="track-len">6:59</span>
+      <span class="track-used">on 1 disc</span>
+    </div>
+  </section>
+
+  <!-- PLAYLISTS -->
+  <section class="block">
+    <div class="block-head">
+      <div class="block-title">Playlists</div>
+      <div class="block-count">3 playlists</div>
+    </div>
+
+    <div class="playlist" data-open="false">
+      <div class="playlist-head">
+        <span class="playlist-name">Rainy Sundays</span>
+        <span class="playlist-meta">6 tracks · 28 min</span>
+      </div>
+      <div class="playlist-body">
+        <ol>
+          <li>Holocene</li>
+          <li>Re: Stacks</li>
+          <li>Skinny Love</li>
+          <li>Flume</li>
+          <li>Blindsided</li>
+          <li>Beach Baby</li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="playlist" data-open="false">
+      <div class="playlist-head">
+        <span class="playlist-name">Drive North</span>
+        <span class="playlist-meta">9 tracks · 41 min</span>
+      </div>
+      <div class="playlist-body">
+        <ol>
+          <li>Motion Sickness</li>
+          <li>Fourth of July</li>
+          <li>Runaway</li>
+          <li>Mystery of Love</li>
+          <li>&hellip; 5 more</li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="playlist" data-open="false">
+      <div class="playlist-head">
+        <span class="playlist-name">Kitchen, 9am</span>
+        <span class="playlist-meta">4 tracks · 15 min</span>
+      </div>
+      <div class="playlist-body">
+        <ol>
+          <li>Beach Baby</li>
+          <li>Electric Feel</li>
+          <li>Kids</li>
+          <li>Two Weeks</li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="new-playlist">+ build a playlist from your library</div>
+  </section>
+
+  <!-- DISCS -->
+  <section class="block">
+    <div class="block-head">
+      <div class="block-title">Discs</div>
+      <div class="block-count">5 registered</div>
+    </div>
+
+    <table class="disc-table">
+      <thead>
+        <tr>
+          <th>disc id</th>
+          <th>plays</th>
+          <th>last seen</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="id">3F:A2:11:9C</td>
+          <td><span class="disc-empty">not mapped</span></td>
+          <td class="disc-seen">now</td>
+        </tr>
+        <tr>
+          <td class="id">A1:00:7B:52</td>
+          <td><span class="disc-mapped">Holocene</span><br><span class="disc-type">song</span></td>
+          <td class="disc-seen">2 days ago</td>
+        </tr>
+        <tr>
+          <td class="id">D4:9E:23:0F</td>
+          <td><span class="disc-mapped">Rainy Sundays</span><br><span class="disc-type">playlist · 6 tracks</span></td>
+          <td class="disc-seen">2 days ago</td>
+        </tr>
+        <tr>
+          <td class="id">7C:11:88:AE</td>
+          <td><span class="disc-mapped">Drive North</span><br><span class="disc-type">playlist · 9 tracks</span></td>
+          <td class="disc-seen">1 week ago</td>
+        </tr>
+        <tr>
+          <td class="id">02:F5:6D:C1</td>
+          <td><span class="disc-mapped">Fourth of July</span><br><span class="disc-type">song</span></td>
+          <td class="disc-seen">3 weeks ago</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <footer>connected over esp32 local network &nbsp;·&nbsp; changes save to the sd card instantly</footer>
+
+</div>
+
+<script>
+  const simBtn = document.getElementById('simBtn');
+  const liveIdle = document.getElementById('liveIdle');
+  const liveHit = document.getElementById('liveHit');
+  const ring = document.getElementById('ring');
+  const savedBanner = document.getElementById('savedBanner');
+  const savedName = document.getElementById('savedName');
+  const hitSub = document.getElementById('hitSub');
+  const clearBtn = document.getElementById('clearBtn');
+  const doneBtn = document.getElementById('doneBtn');
+
+  const tabs = document.querySelectorAll('.map-tab');
+  const listSong = document.getElementById('mapListSong');
+  const listPlaylist = document.getElementById('mapListPlaylist');
+
+  simBtn.addEventListener('click', () => {
+    ring.classList.add('hot');
+    setTimeout(() => {
+      liveIdle.classList.add('hide');
+      liveHit.classList.add('show');
+      savedBanner.classList.remove('show');
+      hitSub.textContent = "Not mapped yet. Choose what this disc should play.";
+    }, 350);
+  });
+
+  tabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      tabs.forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      const mode = tab.dataset.mode;
+      listSong.style.display = mode === 'song' ? 'block' : 'none';
+      listPlaylist.style.display = mode === 'playlist' ? 'block' : 'none';
+      savedBanner.classList.remove('show');
+    });
+  });
+
+  document.querySelectorAll('.map-row').forEach(row => {
+    row.addEventListener('click', () => {
+      const name = row.dataset.name;
+      savedName.textContent = name;
+      savedBanner.classList.add('show');
+      hitSub.textContent = "Mapped. Tap the disc again anytime to change it.";
+    });
+  });
+
+  clearBtn.addEventListener('click', () => {
+    savedBanner.classList.remove('show');
+    hitSub.textContent = "Mapping cleared. This disc plays nothing until you choose again.";
+  });
+
+  doneBtn.addEventListener('click', () => {
+    liveHit.classList.remove('show');
+    liveIdle.classList.remove('hide');
+    ring.classList.remove('hot');
+  });
+
+  document.querySelectorAll('.playlist').forEach(pl => {
+    pl.querySelector('.playlist-head').addEventListener('click', () => {
+      pl.classList.toggle('open');
+    });
+  });
+</script>
+
+</body>
+</html>
