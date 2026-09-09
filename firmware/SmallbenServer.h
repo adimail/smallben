@@ -1,10 +1,10 @@
 #pragma once
 #include "Config.h"
 #include "Dashboard.h"
+#include "Storage.h"
 #include <Arduino.h>
-#include <SD.h>
-#include <SPI.h>
 #include <WebServer.h>
+#include <vector>
 
 WebServer server(HTTP_PORT);
 
@@ -12,16 +12,6 @@ static File uploadFile;
 static bool uploadAborted = false;
 static size_t uploadBytesWritten = 0;
 const size_t MAX_UPLOAD_SIZE = 31457280;
-
-inline bool isJunk(const String &name) {
-	return name.startsWith(".") || name.startsWith("._") ||
-		   name.equalsIgnoreCase("System Volume Information");
-}
-
-inline bool isMp3(String name) {
-	name.toLowerCase();
-	return name.endsWith(".mp3");
-}
 
 inline String jsonEscape(const String &in) {
 	String out;
@@ -35,102 +25,46 @@ inline String jsonEscape(const String &in) {
 	return out;
 }
 
-inline bool isSafePath(const String &path) {
-	if (path.length() == 0 || path.length() > 128)
-		return false;
-	if (!path.startsWith("/"))
-		return false;
-	if (path.indexOf("..") != -1)
-		return false;
-	return true;
+inline String extractJsonString(const String &json, const String &key) {
+	String needle = "\"" + key + "\"";
+	int kpos = json.indexOf(needle);
+	if (kpos == -1)
+		return "";
+	int colon = json.indexOf(':', kpos + needle.length());
+	if (colon == -1)
+		return "";
+	int q1 = json.indexOf('"', colon + 1);
+	if (q1 == -1)
+		return "";
+	int q2 = json.indexOf('"', q1 + 1);
+	if (q2 == -1)
+		return "";
+	return json.substring(q1 + 1, q2);
 }
 
-inline bool deleteFiles(const String &path) {
-	if (!SD.exists(path))
-		return false;
-
-	File target = SD.open(path);
-	if (!target)
-		return false;
-
-	if (!target.isDirectory()) {
-		target.close();
-		return SD.remove(path);
-	}
-
-	File entry = target.openNextFile();
-	while (entry) {
-		String childPath = entry.name();
-		if (!childPath.startsWith("/")) {
-			childPath = (path == "/" ? "" : path) + "/" + childPath;
-		}
-		bool isDir = entry.isDirectory();
-		entry.close();
-
-		if (isDir) {
-			deleteFiles(childPath);
-		} else {
-			SD.remove(childPath);
-		}
-		entry = target.openNextFile();
-	}
-	target.close();
-	return true;
-}
-
-inline void scanMp3Stream(File dir, const String &parentPath, bool &first) {
-	while (true) {
-		File entry = dir.openNextFile();
-		if (!entry)
+inline std::vector<String> extractJsonArray(const String &json, const String &key) {
+	std::vector<String> res;
+	String needle = "\"" + key + "\"";
+	int kpos = json.indexOf(needle);
+	if (kpos == -1)
+		return res;
+	int b1 = json.indexOf('[', kpos + needle.length());
+	int b2 = json.indexOf(']', b1 + 1);
+	if (b1 == -1 || b2 == -1)
+		return res;
+	String arr = json.substring(b1 + 1, b2);
+	int cur = 0;
+	while (cur < (int)arr.length()) {
+		int q1 = arr.indexOf('"', cur);
+		if (q1 == -1)
 			break;
-
-		String name = entry.name();
-		if (isJunk(name)) {
-			entry.close();
-			continue;
-		}
-
-		String fullPath = (parentPath == "/" ? "" : parentPath) + "/" + name;
-		if (entry.isDirectory()) {
-			scanMp3Stream(entry, fullPath, first);
-		} else if (isMp3(name)) {
-			if (!first)
-				server.sendContent(",");
-			first = false;
-			server.sendContent("{\"name\":\"" + jsonEscape(name) + "\",\"path\":\"" +
-							   jsonEscape(fullPath) + "\",\"size\":" + String(entry.size()) + "}");
-		}
-		entry.close();
-	}
-}
-
-inline void scanTreeLevel(File dir) {
-	server.sendContent("[");
-	bool first = true;
-	while (true) {
-		File entry = dir.openNextFile();
-		if (!entry)
+		int q2 = arr.indexOf('"', q1 + 1);
+		if (q2 == -1)
 			break;
-
-		String name = entry.name();
-		if (isJunk(name)) {
-			entry.close();
-			continue;
-		}
-
-		if (!first)
-			server.sendContent(",");
-		first = false;
-
-		if (entry.isDirectory()) {
-			server.sendContent("{\"name\":\"" + jsonEscape(name) + "\",\"type\":\"dir\"}");
-		} else {
-			server.sendContent("{\"name\":\"" + jsonEscape(name) +
-							   "\",\"type\":\"file\",\"size\":" + String(entry.size()) + "}");
-		}
-		entry.close();
+		res.push_back(arr.substring(q1 + 1, q2));
+		cur = q2 + 1;
 	}
-	server.sendContent("]");
+	return res;
 }
 
 inline void handleRoot() { server.send_P(200, "text/html", DASHBOARD_HTML); }
@@ -142,7 +76,13 @@ inline void handleApiMp3() {
 	bool first = true;
 	server.sendContent("[");
 	if (root) {
-		scanMp3Stream(root, "/", first);
+		iterateMp3Tracks(root, "/", [&](const String &name, const String &path, size_t sz) {
+			if (!first)
+				server.sendContent(",");
+			first = false;
+			server.sendContent("{\"name\":\"" + jsonEscape(name) + "\",\"path\":\"" +
+							   jsonEscape(path) + "\",\"size\":" + String(sz) + "}");
+		});
 		root.close();
 	}
 	server.sendContent("]");
@@ -151,15 +91,12 @@ inline void handleApiMp3() {
 
 inline void handleApiTree() {
 	String path = "/";
-	if (server.hasArg("path")) {
+	if (server.hasArg("path"))
 		path = server.arg("path");
-	}
-
 	if (!isSafePath(path)) {
 		server.send(400, "application/json", "{\"error\":\"invalid path\"}");
 		return;
 	}
-
 	File dir = SD.open(path);
 	if (!dir || !dir.isDirectory()) {
 		if (dir)
@@ -167,11 +104,23 @@ inline void handleApiTree() {
 		server.send(404, "application/json", "[]");
 		return;
 	}
-
 	server.setContentLength(CONTENT_LENGTH_UNKNOWN);
 	server.send(200, "application/json", "");
-	scanTreeLevel(dir);
+	server.sendContent("[");
+	bool first = true;
+	iterateDirectory(dir, [&](const String &name, bool isDir, size_t sz) {
+		if (!first)
+			server.sendContent(",");
+		first = false;
+		if (isDir) {
+			server.sendContent("{\"name\":\"" + jsonEscape(name) + "\",\"type\":\"dir\"}");
+		} else {
+			server.sendContent("{\"name\":\"" + jsonEscape(name) +
+							   "\",\"type\":\"file\",\"size\":" + String(sz) + "}");
+		}
+	});
 	dir.close();
+	server.sendContent("]");
 	server.sendContent("");
 }
 
@@ -185,7 +134,7 @@ inline void handleApiDelete() {
 		server.send(400, "application/json", "{\"error\":\"invalid path\"}");
 		return;
 	}
-	if (deleteFiles(path)) {
+	if (deleteStoragePath(path)) {
 		server.send(200, "application/json", "{\"status\":\"ok\"}");
 	} else {
 		server.send(500, "application/json", "{\"error\":\"delete failed\"}");
@@ -198,11 +147,7 @@ inline void handleApiDownload() {
 		return;
 	}
 	String path = server.arg("path");
-	if (!isSafePath(path)) {
-		server.send(400, "text/plain", "Invalid path");
-		return;
-	}
-	if (!SD.exists(path)) {
+	if (!isSafePath(path) || !SD.exists(path)) {
 		server.send(404, "text/plain", "File not found");
 		return;
 	}
@@ -213,13 +158,10 @@ inline void handleApiDownload() {
 		server.send(400, "text/plain", "Cannot download directory");
 		return;
 	}
-
 	String filename = path;
 	int lastSlash = path.lastIndexOf('/');
-	if (lastSlash != -1) {
+	if (lastSlash != -1)
 		filename = path.substring(lastSlash + 1);
-	}
-
 	server.sendHeader("Content-Disposition", "attachment; filename=\"" + filename + "\"");
 	server.streamFile(file, "application/octet-stream");
 	file.close();
@@ -262,11 +204,7 @@ inline void handleFileUploadProcess() {
 				uploadFile.write(upload.buf, upload.currentSize);
 			}
 		}
-	} else if (upload.status == UPLOAD_FILE_END) {
-		if (uploadFile) {
-			uploadFile.close();
-		}
-	} else if (upload.status == UPLOAD_FILE_ABORTED) {
+	} else if (upload.status == UPLOAD_FILE_END || upload.status == UPLOAD_FILE_ABORTED) {
 		if (uploadFile) {
 			uploadFile.close();
 		}
@@ -281,15 +219,151 @@ inline void handleFileUploadResponse() {
 	}
 }
 
-inline void initServer() {
-	pinMode(SD_CS_PIN, OUTPUT);
-	digitalWrite(SD_CS_PIN, HIGH);
+inline void handleApiPlaylistsGet() {
+	server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+	server.send(200, "application/json", "");
+	server.sendContent("[");
+	bool first = true;
+	iteratePlaylists([&](const String &name, int count) {
+		if (!first)
+			server.sendContent(",");
+		first = false;
+		server.sendContent("{\"name\":\"" + jsonEscape(name) +
+						   "\",\"trackCount\":" + String(count) + "}");
+	});
+	server.sendContent("]");
+	server.sendContent("");
+}
 
-	if (!SD.begin(SD_CS_PIN)) {
-		Serial.println("[SD] Card initialization failed.");
-	} else {
-		Serial.println("[SD] Card initialized successfully.");
+inline void handleApiPlaylistsPost() {
+	String body = server.arg("plain");
+	String name = extractJsonString(body, "name");
+	if (!isSafePlaylistName(name)) {
+		server.send(400, "application/json", "{\"error\":\"invalid name\"}");
+		return;
 	}
+	if (createPlaylist(name)) {
+		server.send(200, "application/json", "{\"status\":\"ok\"}");
+	} else {
+		server.send(409, "application/json", "{\"error\":\"already exists or write failed\"}");
+	}
+}
+
+inline void handleApiPlaylistTracksGet() {
+	String uri = server.uri();
+	int prefixLen = 15;
+	int trackSuffix = uri.indexOf("/tracks");
+	String id = "";
+	if (trackSuffix != -1) {
+		id = urldecode(uri.substring(prefixLen, trackSuffix));
+	}
+	if (!isSafePlaylistName(id)) {
+		server.send(400, "application/json", "{\"error\":\"invalid id\"}");
+		return;
+	}
+	server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+	server.send(200, "application/json", "");
+	server.sendContent("[");
+	bool first = true;
+	bool ok = iteratePlaylistTracks(
+		id, [&](const String &name, const String &path, size_t sz, bool exists) {
+			if (!first)
+				server.sendContent(",");
+			first = false;
+			server.sendContent("{\"name\":\"" + jsonEscape(name) + "\",\"path\":\"" +
+							   jsonEscape(path) + "\",\"size\":" + String(sz) +
+							   ",\"exists\":" + (exists ? "true" : "false") + "}");
+		});
+	server.sendContent("]");
+	server.sendContent("");
+	if (!ok) {
+		server.send(404, "application/json", "{\"error\":\"not found\"}");
+	}
+}
+
+inline void handleApiPlaylistTracksUpdate() {
+	if (!server.hasArg("id")) {
+		server.send(400, "application/json", "{\"error\":\"missing id\"}");
+		return;
+	}
+	String id = urldecode(server.arg("id"));
+	if (!isSafePlaylistName(id)) {
+		server.send(400, "application/json", "{\"error\":\"invalid id\"}");
+		return;
+	}
+	String body = server.arg("plain");
+	std::vector<String> tracks = extractJsonArray(body, "tracks");
+	if (overwritePlaylistTracks(id, tracks)) {
+		server.send(200, "application/json", "{\"status\":\"ok\"}");
+	} else {
+		server.send(500, "application/json", "{\"error\":\"write failed\"}");
+	}
+}
+
+inline void handleApiPlaylistTracksAppend() {
+	if (!server.hasArg("id")) {
+		server.send(400, "application/json", "{\"error\":\"missing id\"}");
+		return;
+	}
+	String id = urldecode(server.arg("id"));
+	if (!isSafePlaylistName(id)) {
+		server.send(400, "application/json", "{\"error\":\"invalid id\"}");
+		return;
+	}
+	String body = server.arg("plain");
+	String path = extractJsonString(body, "path");
+	if (!isSafePath(path)) {
+		server.send(400, "application/json", "{\"error\":\"invalid path\"}");
+		return;
+	}
+	if (appendPlaylistTrack(id, path)) {
+		server.send(200, "application/json", "{\"status\":\"ok\"}");
+	} else {
+		server.send(500, "application/json", "{\"error\":\"append failed\"}");
+	}
+}
+
+inline void handleDynamicPlaylists() {
+	String uri = server.uri();
+	HTTPMethod method = server.method();
+	if (uri.startsWith("/api/playlists/") && uri.endsWith("/tracks") && method == HTTP_GET) {
+		handleApiPlaylistTracksGet();
+		return;
+	}
+	if (uri.startsWith("/api/playlists/")) {
+		String id = urldecode(uri.substring(15));
+		if (!isSafePlaylistName(id)) {
+			server.send(400, "application/json", "{\"error\":\"invalid id\"}");
+			return;
+		}
+		if (method == HTTP_PUT) {
+			String body = server.arg("plain");
+			String newName = extractJsonString(body, "newName");
+			if (!isSafePlaylistName(newName)) {
+				server.send(400, "application/json", "{\"error\":\"invalid newName\"}");
+				return;
+			}
+			if (renamePlaylist(id, newName)) {
+				server.send(200, "application/json", "{\"status\":\"ok\"}");
+			} else {
+				server.send(500, "application/json", "{\"error\":\"rename failed\"}");
+			}
+			return;
+		}
+		if (method == HTTP_DELETE) {
+			if (deletePlaylist(id)) {
+				server.send(200, "application/json", "{\"status\":\"ok\"}");
+			} else {
+				server.send(500, "application/json", "{\"error\":\"delete failed\"}");
+			}
+			return;
+		}
+	}
+	server.send(404, "application/json", "{\"error\":\"not found\"}");
+}
+
+inline void initServer() {
+	initStorage();
 
 	server.on("/", HTTP_GET, handleRoot);
 	server.on("/api/mp3", HTTP_GET, handleApiMp3);
@@ -297,6 +371,13 @@ inline void initServer() {
 	server.on("/api/delete", HTTP_DELETE, handleApiDelete);
 	server.on("/api/download", HTTP_GET, handleApiDownload);
 	server.on("/api/upload", HTTP_POST, handleFileUploadResponse, handleFileUploadProcess);
+
+	server.on("/api/playlists", HTTP_GET, handleApiPlaylistsGet);
+	server.on("/api/playlists", HTTP_POST, handleApiPlaylistsPost);
+	server.on("/api/playlists/tracks", HTTP_PUT, handleApiPlaylistTracksUpdate);
+	server.on("/api/playlists/tracks", HTTP_POST, handleApiPlaylistTracksAppend);
+
+	server.onNotFound(handleDynamicPlaylists);
 
 	server.begin();
 	Serial.println("[HTTP] Server started.");

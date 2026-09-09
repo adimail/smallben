@@ -9,51 +9,88 @@ const char DASHBOARD_HTML[] PROGMEM = R"HTML(
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Smallben</title>
 <style>
-:root{--bg:#171513;--panel:#1f1c19;--line:#322d29;--text:#efe9e0;--muted:#8c8478;--dim:#5e584f;--amber:#e8a33d;--green:#7fc99a;--red:#e06c75;
---font-serif:Georgia,'Times New Roman',serif;
---font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace;}
+:root{
+  --bg:#121110;
+  --panel:#191715;
+  --panel-hover:#201d1a;
+  --line:#262320;
+  --text:#ede7df;
+  --muted:#7d756d;
+  --dim:#4e4943;
+  --amber:#d99b43;
+  --green:#52b788;
+  --red:#d95d5d;
+  --font-serif:Georgia,'Times New Roman',serif;
+  --font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace;
+}
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg);color:var(--text);font-family:var(--font-mono);font-size:13px;line-height:1.6}
-.wrap{max-width:680px;margin:0 auto;padding:0 16px}
-.top{display:flex;justify-content:space-between;align-items:center;padding:20px 0;border-bottom:1px solid var(--line)}
-.brand{font-family:var(--font-serif);font-weight:600;font-size:22px}
-.status{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
-.dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 0 3px #22301f}
-.hero{padding:36px 0;border-bottom:1px solid var(--line)}
-.ring{width:44px;height:44px;border-radius:50%;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;margin-bottom:12px}
-.ring-core{width:8px;height:8px;border-radius:50%;background:var(--dim)}
-.sub{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em}
-.headline{font-family:var(--font-serif);font-size:20px;margin-top:4px;color:var(--text)}
-.block{padding:28px 0}
+body{background:var(--bg);color:var(--text);font-family:var(--font-mono);font-size:13px;line-height:1.6;-webkit-font-smoothing:antialiased}
+.wrap{max-width:680px;margin:0 auto;padding:0 20px 80px}
+.top{display:flex;justify-content:space-between;align-items:center;padding:24px 0 20px;border-bottom:1px solid var(--line)}
+.brand{font-family:var(--font-serif);font-weight:600;font-size:22px;letter-spacing:-0.01em}
+.status{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);letter-spacing:0.04em}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 0 3px rgba(82,183,136,0.15)}
+
+.reader-bar{display:flex;align-items:center;gap:14px;padding:16px 20px;background:var(--panel);border:1px solid var(--line);border-radius:3px;margin:20px 0}
+.disc-indicator{width:28px;height:28px;border-radius:50%;border:1px solid var(--line);background:var(--bg);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.disc-dot{width:6px;height:6px;border-radius:50%;background:var(--amber)}
+.reader-text{min-width:0}
+.reader-sub{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em}
+.reader-headline{font-family:var(--font-serif);font-size:15px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+.nav-tabs{display:flex;border-bottom:1px solid var(--line);margin-bottom:24px;gap:8px}
+.nav-tab{background:none;border:none;color:var(--muted);font-family:var(--font-mono);font-size:13px;padding:10px 16px;cursor:pointer;border-bottom:2px solid transparent;transition:color .15s,border-color .15s}
+.nav-tab:hover{color:var(--text)}
+.nav-tab.active{color:var(--amber);border-bottom-color:var(--amber)}
+
+.view{display:none}
+.view.active{display:block}
+
 .head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:16px}
-.title{font-family:var(--font-serif);font-size:18px}
+.title{font-family:var(--font-serif);font-size:20px;font-weight:400}
 .count{color:var(--dim);font-size:12px}
-.actions{display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap}
-.tabs{display:flex;gap:8px}
-.tab{background:var(--panel);border:1px solid var(--line);color:var(--muted);padding:5px 12px;font-family:inherit;font-size:12px;cursor:pointer}
-.tab.active{border-color:#4a3a20;color:var(--amber);background:rgba(232,163,61,.08)}
-.btn-up{background:var(--panel);border:1px solid var(--line);color:var(--text);padding:5px 12px;font-family:inherit;font-size:12px;cursor:pointer;margin-left:auto}
-.btn-up:hover{border-color:var(--dim)}
-.progress-box{display:none;width:100%;background:var(--panel);border:1px solid var(--line);height:18px;margin-bottom:16px;position:relative}
-.progress-bar{height:100%;width:0%;background:var(--amber);transition:width .1s}
-.progress-txt{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--text);font-weight:bold}
-.track{display:grid;grid-template-columns:26px 1fr auto;gap:10px;padding:9px 0;border-bottom:1px solid var(--line);align-items:center}
-.num{color:var(--dim);font-size:11px}
-.name{color:var(--text);word-break:break-all}
-.size{color:var(--muted);font-size:12px;white-space:nowrap}
-.btn-del{background:none;border:none;color:var(--dim);cursor:pointer;padding:2px 6px;font-family:inherit;font-size:12px}
+
+.track-row{display:grid;grid-template-columns:30px 1fr auto auto;gap:10px;padding:12px 0;border-bottom:1px solid var(--line);align-items:center}
+.num{color:var(--dim);font-size:12px}
+.track-main{min-width:0}
+.track-title{color:var(--text);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.track-sub{color:var(--dim);font-size:11px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.track-size{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+.track-actions{display:flex;gap:6px}
+
+.btn-icon{background:none;border:none;color:var(--dim);cursor:pointer;padding:6px 8px;font-family:inherit;font-size:12px;transition:color .15s}
+.btn-icon:hover{color:var(--amber)}
 .btn-del:hover{color:var(--red)}
-.tree{background:var(--panel);border:1px solid var(--line);padding:12px 16px}
-.tree ul{list-style:none;padding-left:16px}
+
+.btn-loadmore{width:100%;padding:12px;background:var(--panel);border:1px solid var(--line);color:var(--amber);font-family:inherit;font-size:12px;cursor:pointer;text-align:center;transition:background .15s,border-color .15s;margin-top:16px;border-radius:2px}
+.btn-loadmore:hover{background:var(--panel-hover);border-color:var(--dim)}
+
+.plist-card{display:flex;justify-content:space-between;align-items:center;padding:18px 20px;background:var(--panel);border:1px solid var(--line);border-radius:2px;margin-bottom:10px;cursor:pointer;transition:background .15s,border-color .15s}
+.plist-card:hover{background:var(--panel-hover);border-color:var(--dim)}
+.plist-title{color:var(--text);font-size:14px;font-weight:400}
+.plist-meta{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums;display:flex;gap:12px;align-items:center}
+
+.btn-build{width:100%;padding:16px;background:transparent;border:1px dashed var(--line);color:var(--muted);font-family:inherit;font-size:12px;cursor:pointer;text-align:center;transition:border-color .15s,color .15s;margin-top:12px;border-radius:2px}
+.btn-build:hover{border-color:var(--dim);color:var(--text)}
+
+.bar-wrap{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+.btn-link{background:none;border:none;color:var(--amber);cursor:pointer;font-family:inherit;font-size:12px;padding:0}
+.btn-link:hover{text-decoration:underline}
+
+.tree{background:var(--panel);border:1px solid var(--line);padding:14px 18px;border-radius:2px}
+.tree ul{list-style:none;padding-left:18px}
 .tree>ul{padding-left:0}
-.tree li{padding:4px 0}
+.tree li{padding:5px 0}
 .tree-row{display:flex;justify-content:space-between;align-items:center;gap:8px}
-.tree-left{display:flex;align-items:center;gap:6px;min-width:0}
-.folder{color:var(--amber);cursor:pointer;user-select:none;word-break:break-all}
-.file-dl{color:var(--text);text-decoration:none;cursor:pointer;word-break:break-all}
+.tree-left{display:flex;align-items:center;gap:8px;min-width:0}
+.folder{color:var(--amber);cursor:pointer;user-select:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.file-dl{color:var(--text);text-decoration:none;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .file-dl:hover{color:var(--amber);text-decoration:underline}
-.tree-size{color:var(--dim);font-size:11px;white-space:nowrap}
-.msg{color:var(--dim);padding:20px 0}
+
+.progress-box{display:none;width:100%;background:var(--panel);border:1px solid var(--line);height:14px;margin-bottom:16px;position:relative}
+.progress-bar{height:100%;width:0%;background:var(--amber);transition:width .1s}
+.progress-txt{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:9px;color:var(--text);font-weight:bold}
+.msg{color:var(--dim);padding:20px 0;text-align:center}
 </style>
 </head>
 <body>
@@ -62,191 +99,473 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-mono);font-si
     <div class="brand">Smallben</div>
     <div class="status"><span class="dot"></span><span>online</span></div>
   </div>
-  <div class="hero">
-    <div class="ring"><div class="ring-core"></div></div>
-    <div class="sub">reader status</div>
-    <div class="headline">Ready. Manage library and track storage below.</div>
+
+  <div class="reader-bar">
+    <div class="disc-indicator"><div class="disc-dot"></div></div>
+    <div class="reader-text">
+      <div class="reader-sub">reader status</div>
+      <div class="reader-headline">Waiting for disc...</div>
+    </div>
   </div>
-  <div class="block">
+
+  <div class="nav-tabs">
+    <button class="nav-tab active" id="tabTracks" onclick="switchView('tracks')">Tracks</button>
+    <button class="nav-tab" id="tabPlaylists" onclick="switchView('playlists')">Playlists</button>
+    <button class="nav-tab" id="tabFiles" onclick="switchView('files')">Files</button>
+  </div>
+
+  <div id="viewTracks" class="view active">
     <div class="head">
       <div class="title">Library</div>
-      <div class="count" id="cnt">Scanning...</div>
+      <div class="count" id="libCount">Scanning...</div>
     </div>
-    <div class="actions">
-      <div class="tabs">
-        <button class="tab active" id="tMp3">Tracks (.mp3)</button>
-        <button class="tab" id="tTree">File Tree</button>
+    <div id="trackList"><div class="msg">Reading library...</div></div>
+    <button class="btn-loadmore" id="btnLoadMore" style="display:none"></button>
+  </div>
+
+  <div id="viewPlaylists" class="view">
+    <div id="plistMain">
+      <div class="head">
+        <div class="title">Playlists</div>
+        <div class="count" id="plistCount">...</div>
       </div>
-      <button class="btn-up" id="btnUp">&#8593; Upload File</button>
+      <div id="plistCards"></div>
+      <button class="btn-build" id="btnNewList">+ build a playlist from your library</button>
+    </div>
+    <div id="plistDetail" style="display:none">
+      <div class="bar-wrap">
+        <button class="btn-link" id="btnBackPlaylists">&larr; Back to all playlists</button>
+        <div>
+          <button class="btn-icon" id="btnRenameCurrent">Rename</button>
+          <button class="btn-icon btn-del" id="btnDeleteCurrent">Delete</button>
+        </div>
+      </div>
+      <div class="head">
+        <div class="title" id="plistHeadTitle">Playlist</div>
+        <div class="count" id="plistDetailCount">0 tracks</div>
+      </div>
+      <div id="detailTrackList"></div>
+    </div>
+  </div>
+
+  <div id="viewFiles" class="view">
+    <div class="head">
+      <div class="title">File Storage</div>
+      <button class="btn-link" id="btnUp">&#8593; Upload File</button>
       <input type="file" id="fileInput" style="display:none">
     </div>
     <div class="progress-box" id="pBox">
       <div class="progress-bar" id="pBar"></div>
       <div class="progress-txt" id="pTxt">0%</div>
     </div>
-    <div id="vMp3"><div class="msg" id="mp3List">Reading SD card...</div></div>
-    <div id="vTree" style="display:none"><div class="tree" id="treeList">Loading tree...</div></div>
+    <div class="tree" id="treeList">Loading tree...</div>
   </div>
 </div>
+
 <script>
-const cnt=document.getElementById('cnt'),mp3List=document.getElementById('mp3List'),treeList=document.getElementById('treeList'),
-vMp3=document.getElementById('vMp3'),vTree=document.getElementById('vTree'),tMp3=document.getElementById('tMp3'),tTree=document.getElementById('tTree'),
-btnUp=document.getElementById('btnUp'),fileInput=document.getElementById('fileInput'),pBox=document.getElementById('pBox'),
-pBar=document.getElementById('pBar'),pTxt=document.getElementById('pTxt');
+let tracks = [];
+let playlists = [];
+let showAllTracks = false;
+let currentPlaylist = null;
+let currentPlaylistTracks = [];
 
-let curTab='mp3';
+const tabTracks = document.getElementById('tabTracks');
+const tabPlaylists = document.getElementById('tabPlaylists');
+const tabFiles = document.getElementById('tabFiles');
+const viewTracks = document.getElementById('viewTracks');
+const viewPlaylists = document.getElementById('viewPlaylists');
+const viewFiles = document.getElementById('viewFiles');
 
-function fmt(b){return b<1048576?(b/1024).toFixed(1)+' KB':(b/1048576).toFixed(1)+' MB'}
+const libCount = document.getElementById('libCount');
+const trackList = document.getElementById('trackList');
+const btnLoadMore = document.getElementById('btnLoadMore');
 
-function showTab(mp3){
-  curTab=mp3?'mp3':'tree';
-  tMp3.classList.toggle('active',mp3);tTree.classList.toggle('active',!mp3);
-  vMp3.style.display=mp3?'block':'none';vTree.style.display=mp3?'none':'block';
+const plistCount = document.getElementById('plistCount');
+const plistCards = document.getElementById('plistCards');
+const plistMain = document.getElementById('plistMain');
+const plistDetail = document.getElementById('plistDetail');
+const plistHeadTitle = document.getElementById('plistHeadTitle');
+const plistDetailCount = document.getElementById('plistDetailCount');
+const detailTrackList = document.getElementById('detailTrackList');
+const btnNewList = document.getElementById('btnNewList');
+const btnBackPlaylists = document.getElementById('btnBackPlaylists');
+const btnRenameCurrent = document.getElementById('btnRenameCurrent');
+const btnDeleteCurrent = document.getElementById('btnDeleteCurrent');
+
+const treeList = document.getElementById('treeList');
+const btnUp = document.getElementById('btnUp');
+const fileInput = document.getElementById('fileInput');
+const pBox = document.getElementById('pBox');
+const pBar = document.getElementById('pBar');
+const pTxt = document.getElementById('pTxt');
+
+function fmt(b){ return b < 1048576 ? (b/1024).toFixed(1)+' KB' : (b/1048576).toFixed(1)+' MB'; }
+
+function cleanName(n){ return n.replace(/\.[^/.]+$/, ''); }
+
+function switchView(viewName){
+  tabTracks.classList.toggle('active', viewName === 'tracks');
+  tabPlaylists.classList.toggle('active', viewName === 'playlists');
+  tabFiles.classList.toggle('active', viewName === 'files');
+  viewTracks.classList.toggle('active', viewName === 'tracks');
+  viewPlaylists.classList.toggle('active', viewName === 'playlists');
+  viewFiles.classList.toggle('active', viewName === 'files');
+  if(viewName === 'files') loadTree();
+  if(viewName === 'playlists' && !currentPlaylist) loadPlaylists();
+  if(viewName === 'tracks' && !tracks.length) loadLibrary();
 }
 
-function refreshCurrentView(){
-  if(curTab==='mp3') loadMp3();
-  else loadTree();
-}
-
-function confirmDelete(path){
-  if(!confirm('Are you sure you want to permanently delete:\n'+path)) return;
-  fetch('/api/delete?path='+encodeURIComponent(path),{method:'DELETE'})
-    .then(r=>r.json())
-    .then(d=>{
-      if(d.status==='ok') refreshCurrentView();
-      else alert(d.error||'Failed to delete file.');
-    })
-    .catch(()=>alert('Network error while deleting file.'));
-}
-
-btnUp.onclick=()=>fileInput.click();
-
-fileInput.onchange=()=>{
-  if(!fileInput.files||fileInput.files.length===0) return;
-  const file=fileInput.files[0];
-  if(file.size>31457280){
-    alert('File exceeds the 30MB size limit.');
-    fileInput.value='';
+function renderTracksSlice(){
+  if(!tracks.length){
+    trackList.innerHTML = '<div class="msg">No tracks found on storage.</div>';
+    btnLoadMore.style.display = 'none';
     return;
   }
+  const visible = showAllTracks ? tracks : tracks.slice(0, 5);
+  trackList.innerHTML = visible.map((t, i) => `
+    <div class="track-row">
+      <span class="num">${String(i+1).padStart(2,'0')}</span>
+      <div class="track-main">
+        <div class="track-title">${cleanName(t.name)}</div>
+        <div class="track-sub">${t.path}</div>
+      </div>
+      <span class="track-size">${fmt(t.size)}</span>
+      <div class="track-actions">
+        <button class="btn-icon" onclick="addToPlaylistPrompt('${t.path.replace(/'/g,"\\'")}')">+ list</button>
+      </div>
+    </div>
+  `).join('');
 
-  pBox.style.display='block';
-  pBar.style.width='0%';
-  pTxt.textContent='0%';
-  btnUp.disabled=true;
+  if(tracks.length > 5){
+    btnLoadMore.style.display = 'block';
+    btnLoadMore.textContent = showAllTracks ? 'Show Less' : `Show All Tracks (${tracks.length - 5} more)`;
+  } else {
+    btnLoadMore.style.display = 'none';
+  }
+}
 
-  const xhr=new XMLHttpRequest();
-  xhr.open('POST','/api/upload?path=/');
-
-  xhr.upload.onprogress=e=>{
-    if(e.lengthComputable){
-      const pct=Math.round((e.loaded/e.total)*100);
-      pBar.style.width=pct+'%';
-      pTxt.textContent=pct+'%';
-    }
-  };
-
-  xhr.onload=()=>{
-    pBox.style.display='none';
-    btnUp.disabled=false;
-    fileInput.value='';
-    if(xhr.status>=200&&xhr.status<300){
-      refreshCurrentView();
-    }else{
-      alert('Upload failed: '+(xhr.responseText||'Server error'));
-    }
-  };
-
-  xhr.onerror=()=>{
-    pBox.style.display='none';
-    btnUp.disabled=false;
-    fileInput.value='';
-    alert('Upload failed due to network error.');
-  };
-
-  const form=new FormData();
-  form.append('file',file,file.name);
-  xhr.send(form);
+btnLoadMore.onclick = () => {
+  showAllTracks = !showAllTracks;
+  renderTracksSlice();
 };
 
-function loadMp3(){
-  showTab(true);
+function loadLibrary(){
   fetch('/api/mp3').then(r=>r.json()).then(d=>{
-    cnt.textContent=d.length+' tracks';
-    if(!d.length){mp3List.textContent='No MP3 files found.';return;}
-    mp3List.innerHTML=d.map((f,i)=>`
-      <div class="track">
-        <span class="num">${String(i+1).padStart(2,'0')}</span>
-        <span class="name">${f.name}</span>
-        <span class="size">${fmt(f.size)}</span>
-      </div>`).join('');
-  }).catch(()=>{mp3List.textContent='Error reading tracks.';});
+    tracks = d;
+    libCount.textContent = d.length + ' tracks on sd card';
+    renderTracksSlice();
+  }).catch(()=>{ trackList.innerHTML = '<div class="msg">Error reading storage.</div>'; });
+}
+
+function loadPlaylists(){
+  fetch('/api/playlists').then(r=>r.json()).then(d=>{
+    playlists = d;
+    plistCount.textContent = d.length + ' playlists';
+    if(!d.length){
+      plistCards.innerHTML = '<div class="msg">No playlists created yet.</div>';
+      return;
+    }
+    plistCards.innerHTML = d.map(p => {
+      const base = p.name.replace('.m3u','');
+      return `
+        <div class="plist-card" onclick="openPlaylist('${base}')">
+          <span class="plist-title">${base}</span>
+          <div class="plist-meta">
+            <span>${p.trackCount} tracks</span>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }).catch(()=>{ plistCards.innerHTML = '<div class="msg">Failed to load playlists.</div>'; });
+}
+
+function openPlaylist(name){
+  currentPlaylist = name;
+  plistMain.style.display = 'none';
+  plistDetail.style.display = 'block';
+  plistHeadTitle.textContent = name;
+  plistDetailCount.textContent = 'Loading...';
+  detailTrackList.innerHTML = '<div class="msg">Loading tracks...</div>';
+  fetch('/api/playlists/' + encodeURIComponent(name) + '/tracks')
+    .then(r=>r.json())
+    .then(list => {
+      currentPlaylistTracks = list;
+      renderPlaylistTracks();
+    }).catch(()=>{ detailTrackList.innerHTML = '<div class="msg">Failed to load playlist tracks.</div>'; });
+}
+
+function renderPlaylistTracks(){
+  plistDetailCount.textContent = currentPlaylistTracks.length + ' tracks';
+  if(!currentPlaylistTracks.length){
+    detailTrackList.innerHTML = '<div class="msg">This playlist is empty.</div>';
+    return;
+  }
+  detailTrackList.innerHTML = currentPlaylistTracks.map((t, i) => `
+    <div class="track-row">
+      <span class="num">${String(i+1).padStart(2,'0')}</span>
+      <div class="track-main">
+        <div class="track-title">${cleanName(t.name)}</div>
+        <div class="track-sub">${t.path}</div>
+      </div>
+      <span class="track-size">${fmt(t.size)}</span>
+      <div class="track-actions">
+        <button class="btn-icon" onclick="moveTrack(${i}, -1)">&#9650;</button>
+        <button class="btn-icon" onclick="moveTrack(${i}, 1)">&#9660;</button>
+        <button class="btn-icon btn-del" onclick="removeTrack(${i})">&#10005;</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function savePlaylistOrder(){
+  const paths = currentPlaylistTracks.map(t => t.path);
+  fetch('/api/playlists/tracks?id=' + encodeURIComponent(currentPlaylist), {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({tracks: paths})
+  }).then(r=>r.json()).then(d=>{
+    if(d.status !== 'ok') alert('Failed to sync playlist.');
+  }).catch(()=>alert('Network error while saving playlist.'));
+}
+
+function moveTrack(idx, dir){
+  const target = idx + dir;
+  if(target < 0 || target >= currentPlaylistTracks.length) return;
+  const temp = currentPlaylistTracks[idx];
+  currentPlaylistTracks[idx] = currentPlaylistTracks[target];
+  currentPlaylistTracks[target] = temp;
+  renderPlaylistTracks();
+  savePlaylistOrder();
+}
+
+function removeTrack(idx){
+  currentPlaylistTracks.splice(idx, 1);
+  renderPlaylistTracks();
+  savePlaylistOrder();
+}
+
+btnBackPlaylists.onclick = () => {
+  currentPlaylist = null;
+  plistDetail.style.display = 'none';
+  plistMain.style.display = 'block';
+  loadPlaylists();
+};
+
+btnNewList.onclick = () => {
+  const name = prompt('Name your playlist:');
+  if(!name) return;
+  fetch('/api/playlists', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name: name.trim()})
+  }).then(r=>r.json()).then(d=>{
+    if(d.status === 'ok') loadPlaylists();
+    else alert(d.error || 'Failed to create playlist');
+  }).catch(()=>alert('Network error'));
+};
+
+btnRenameCurrent.onclick = () => {
+  if(!currentPlaylist) return;
+  const n = prompt('Rename playlist to:', currentPlaylist);
+  if(!n || n === currentPlaylist) return;
+  fetch('/api/playlists/' + encodeURIComponent(currentPlaylist), {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({newName: n.trim()})
+  }).then(r=>r.json()).then(d=>{
+    if(d.status === 'ok'){
+      currentPlaylist = n.trim();
+      plistHeadTitle.textContent = currentPlaylist;
+    } else {
+      alert(d.error || 'Failed to rename');
+    }
+  }).catch(()=>alert('Network error'));
+};
+
+btnDeleteCurrent.onclick = () => {
+  if(!currentPlaylist) return;
+  if(!confirm('Permanently delete playlist: ' + currentPlaylist + '?')) return;
+  fetch('/api/playlists/' + encodeURIComponent(currentPlaylist), { method: 'DELETE' })
+    .then(r=>r.json())
+    .then(d=>{
+      if(d.status === 'ok') btnBackPlaylists.click();
+      else alert(d.error || 'Failed to delete');
+    }).catch(()=>alert('Network error'));
+};
+
+function addToPlaylistPrompt(path){
+  if(!playlists.length){
+    fetch('/api/playlists').then(r=>r.json()).then(d=>{
+      playlists = d;
+      showAddPrompt(path);
+    }).catch(()=>alert('No playlists found.'));
+    return;
+  }
+  showAddPrompt(path);
+}
+
+function showAddPrompt(path){
+  if(!playlists.length){
+    alert('Please create a playlist first.');
+    return;
+  }
+  const opts = playlists.map((p, i) => `${i+1}: ${p.name.replace('.m3u','')}`).join('\n');
+  const sel = prompt('Select playlist number:\n' + opts);
+  const idx = parseInt(sel, 10) - 1;
+  if(isNaN(idx) || idx < 0 || idx >= playlists.length) return;
+  const target = playlists[idx].name.replace('.m3u','');
+  fetch('/api/playlists/tracks?id=' + encodeURIComponent(target), {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({path: path})
+  }).then(r=>r.json()).then(d=>{
+    if(d.status === 'ok'){
+      loadPlaylists();
+      alert('Track added to ' + target);
+    } else {
+      alert(d.error || 'Failed to add');
+    }
+  }).catch(()=>alert('Network error'));
+}
+
+function isDbOrSysFile(name){
+  const n = name.toLowerCase();
+  return n.endsWith('.db') || n.endsWith('.dat') || n.endsWith('.idx') || n.endsWith('.bin') || n.endsWith('.sys') || n === 'thumbs.db' || n === '.ds_store';
 }
 
 function fetchLevel(path){
-  return fetch('/api/tree?path='+encodeURIComponent(path)).then(r=>r.json());
+  return fetch('/api/tree?path=' + encodeURIComponent(path)).then(r=>r.json());
 }
 
 function createTreeItem(node, parentPath){
-  const li=document.createElement('li');
-  const full=(parentPath==='/'?'':parentPath)+'/'+node.name;
-  if(node.type==='dir'){
-    const row=document.createElement('div');
-    row.className='tree-row';
-    const left=document.createElement('div');
-    left.className='tree-left';
-    const label=document.createElement('span');
-    label.className='folder';
-    label.textContent='\u25B8 \uD83D\uDCC1 '+node.name+'/';
+  if(node.type !== 'dir' && isDbOrSysFile(node.name)) return null;
+  const li = document.createElement('li');
+  const full = (parentPath === '/' ? '' : parentPath) + '/' + node.name;
+  if(node.type === 'dir'){
+    const row = document.createElement('div');
+    row.className = 'tree-row';
+    const left = document.createElement('div');
+    left.className = 'tree-left';
+    const label = document.createElement('span');
+    label.className = 'folder';
+    label.textContent = '\u25B8 ' + node.name + '/';
     left.appendChild(label);
     row.appendChild(left);
-    const childUl=document.createElement('ul');
-    childUl.style.display='none';
-    let loaded=false, loading=false;
-    label.onclick=()=>{
-      const open=childUl.style.display==='block';
-      if(open){ childUl.style.display='none'; label.textContent='\u25B8 \uD83D\uDCC1 '+node.name+'/'; return; }
-      label.textContent='\u25BE \uD83D\uDCC1 '+node.name+'/';
-      childUl.style.display='block';
-      if(loaded||loading) return;
-      loading=true;
-      childUl.innerHTML='<li class="msg">Loading...</li>';
-      fetchLevel(full).then(children=>{
-        loaded=true; loading=false;
-        childUl.innerHTML='';
-        if(!children.length){childUl.innerHTML='<li class="msg">Empty</li>';return;}
-        children.forEach(c=>childUl.appendChild(createTreeItem(c, full)));
-      }).catch(()=>{loading=false; childUl.innerHTML='<li class="msg">Error loading folder</li>';});
+    const childUl = document.createElement('ul');
+    childUl.style.display = 'none';
+    let loaded = false, loading = false;
+    label.onclick = () => {
+      const open = childUl.style.display === 'block';
+      if(open){
+        childUl.style.display = 'none';
+        label.textContent = '\u25B8 ' + node.name + '/';
+        return;
+      }
+      label.textContent = '\u25BE ' + node.name + '/';
+      childUl.style.display = 'block';
+      if(loaded || loading) return;
+      loading = true;
+      childUl.innerHTML = '<li class="msg">Loading...</li>';
+      fetchLevel(full).then(children => {
+        loaded = true; loading = false;
+        childUl.innerHTML = '';
+        const valid = children.filter(c => c.type === 'dir' || !isDbOrSysFile(c.name));
+        if(!valid.length){ childUl.innerHTML = '<li class="msg">Empty</li>'; return; }
+        valid.forEach(c => {
+          const el = createTreeItem(c, full);
+          if(el) childUl.appendChild(el);
+        });
+      }).catch(()=>{ loading = false; childUl.innerHTML = '<li class="msg">Error</li>'; });
     };
     li.appendChild(row);
     li.appendChild(childUl);
   } else {
-    li.innerHTML=`<div class="tree-row">
-      <div class="tree-left">
-        <a class="file-dl" href="/api/download?path=${encodeURIComponent(full)}" download="${node.name}">\uD83D\uDCC4 ${node.name}</a>
-        <span class="tree-size">${fmt(node.size)}</span>
+    li.innerHTML = `
+      <div class="tree-row">
+        <div class="tree-left">
+          <a class="file-dl" href="/api/download?path=${encodeURIComponent(full)}" download="${node.name}">${node.name}</a>
+          <span class="track-size" style="font-size:11px">${fmt(node.size)}</span>
+        </div>
+        <button class="btn-icon btn-del" onclick="confirmDelete('${full.replace(/'/g,"\\'")}')">&#10005;</button>
       </div>
-      <button class="btn-del" onclick="confirmDelete('${full.replace(/'/g,"\\'")}')">&#10005;</button>
-    </div>`;
+    `;
   }
   return li;
 }
 
 function loadTree(){
-  showTab(false);
-  treeList.innerHTML='<div class="msg">Loading tree...</div>';
-  fetchLevel('/').then(nodes=>{
-    treeList.innerHTML='';
-    if(!nodes.length){treeList.innerHTML='<div class="msg">Empty</div>';return;}
-    const ul=document.createElement('ul');
-    nodes.forEach(n=>ul.appendChild(createTreeItem(n, '/')));
+  treeList.innerHTML = '<div class="msg">Loading filesystem...</div>';
+  fetchLevel('/').then(nodes => {
+    treeList.innerHTML = '';
+    const valid = nodes.filter(n => n.type === 'dir' || !isDbOrSysFile(n.name));
+    if(!valid.length){ treeList.innerHTML = '<div class="msg">Empty card.</div>'; return; }
+    const ul = document.createElement('ul');
+    valid.forEach(n => {
+      const el = createTreeItem(n, '/');
+      if(el) ul.appendChild(el);
+    });
     treeList.appendChild(ul);
-  }).catch(()=>{treeList.textContent='Error reading tree.';});
+  }).catch(()=>{ treeList.innerHTML = '<div class="msg">Error reading files.</div>'; });
 }
 
-tMp3.onclick=loadMp3;tTree.onclick=loadTree;
-loadMp3();
+function confirmDelete(path){
+  if(!confirm('Permanently delete ' + path + '?')) return;
+  fetch('/api/delete?path=' + encodeURIComponent(path), { method: 'DELETE' })
+    .then(r=>r.json()).then(d=>{
+      if(d.status === 'ok'){
+        loadTree();
+        loadLibrary();
+      } else alert(d.error || 'Failed to delete');
+    }).catch(()=>alert('Network error'));
+}
+
+btnUp.onclick = () => fileInput.click();
+
+fileInput.onchange = () => {
+  if(!fileInput.files || fileInput.files.length === 0) return;
+  const file = fileInput.files[0];
+  if(file.size > 31457280){
+    alert('File exceeds the 30MB size limit.');
+    fileInput.value = '';
+    return;
+  }
+  pBox.style.display = 'block';
+  pBar.style.width = '0%';
+  pTxt.textContent = '0%';
+  btnUp.disabled = true;
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/api/upload?path=/');
+  xhr.upload.onprogress = e => {
+    if(e.lengthComputable){
+      const pct = Math.round((e.loaded / e.total) * 100);
+      pBar.style.width = pct + '%';
+      pTxt.textContent = pct + '%';
+    }
+  };
+  xhr.onload = () => {
+    pBox.style.display = 'none';
+    btnUp.disabled = false;
+    fileInput.value = '';
+    if(xhr.status >= 200 && xhr.status < 300){
+      loadLibrary();
+      loadTree();
+    } else {
+      alert('Upload failed: ' + (xhr.responseText || 'Server error'));
+    }
+  };
+  xhr.onerror = () => {
+    pBox.style.display = 'none';
+    btnUp.disabled = false;
+    fileInput.value = '';
+    alert('Upload network error.');
+  };
+  const form = new FormData();
+  form.append('file', file, file.name);
+  xhr.send(form);
+};
+
+loadLibrary();
+loadPlaylists();
 </script>
 </body>
 </html>
