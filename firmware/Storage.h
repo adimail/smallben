@@ -12,6 +12,13 @@ static SPIClass sdSPI(HSPI);
 static SemaphoreHandle_t sdMutex = nullptr;
 static bool g_sdReady = false;
 
+static uint64_t g_cachedTotalBytes = 0;
+static uint64_t g_cachedUsedBytes = 0;
+static unsigned long g_lastSdStatsUpdate = 0;
+
+static char g_reservedAudioPath[128] = {0};
+static bool (*g_isAudioPathActiveCheck)(const String &path) = nullptr;
+
 inline void ensureSdMutex() {
 	if (!sdMutex) {
 		sdMutex = xSemaphoreCreateRecursiveMutex();
@@ -22,9 +29,15 @@ class SdGuard {
   public:
 	SdGuard() {
 		ensureSdMutex();
-		xSemaphoreTakeRecursive(sdMutex, portMAX_DELAY);
+		if (sdMutex) {
+			xSemaphoreTakeRecursive(sdMutex, portMAX_DELAY);
+		}
 	}
-	~SdGuard() { xSemaphoreGiveRecursive(sdMutex); }
+	~SdGuard() {
+		if (sdMutex) {
+			xSemaphoreGiveRecursive(sdMutex);
+		}
+	}
 	SdGuard(const SdGuard &) = delete;
 	SdGuard &operator=(const SdGuard &) = delete;
 };
@@ -49,29 +62,57 @@ static bool g_playlistCacheValid = false;
 static std::map<String, std::vector<String>> g_trackPlaylistIndex;
 
 inline void invalidateTrackCache() { g_trackCacheValid = false; }
-
 inline void invalidatePlaylistCache() { g_playlistCacheValid = false; }
+
+inline void setAudioPathActiveChecker(bool (*fn)(const String &)) { g_isAudioPathActiveCheck = fn; }
+
+inline void setAudioPathReserved(const char *path) {
+	if (path) {
+		strncpy(g_reservedAudioPath, path, sizeof(g_reservedAudioPath) - 1);
+		g_reservedAudioPath[sizeof(g_reservedAudioPath) - 1] = '\0';
+	} else {
+		g_reservedAudioPath[0] = '\0';
+	}
+}
+
+inline void clearAudioPathReserved() { g_reservedAudioPath[0] = '\0'; }
+
+inline bool isAudioPathCurrentlyActive(const String &path) {
+	if (g_reservedAudioPath[0] != '\0') {
+		String reserved(g_reservedAudioPath);
+		if (reserved == path)
+			return true;
+		if (path != "/" && reserved.startsWith(path + "/"))
+			return true;
+	}
+	if (g_isAudioPathActiveCheck) {
+		return g_isAudioPathActiveCheck(path);
+	}
+	return false;
+}
 
 inline String urldecode(const String &src) {
 	String decoded = "";
-	char a, b;
+	decoded.reserve(src.length());
 	for (size_t i = 0; i < src.length(); i++) {
 		if ((src[i] == '%') && (i + 2 < src.length()) && isxdigit(src[i + 1]) &&
 			isxdigit(src[i + 2])) {
-			a = src[i + 1];
-			b = src[i + 2];
-			if (a >= 'a')
-				a -= 'a' - 'A';
-			if (a >= 'A')
+			char a = src[i + 1];
+			char b = src[i + 2];
+			if (a >= 'a' && a <= 'f')
+				a -= ('a' - 10);
+			else if (a >= 'A' && a <= 'F')
 				a -= ('A' - 10);
 			else
 				a -= '0';
-			if (b >= 'a')
-				b -= 'a' - 'A';
-			if (b >= 'A')
+
+			if (b >= 'a' && b <= 'f')
+				b -= ('a' - 10);
+			else if (b >= 'A' && b <= 'F')
 				b -= ('A' - 10);
 			else
 				b -= '0';
+
 			decoded += (char)(16 * a + b);
 			i += 2;
 		} else if (src[i] == '+') {
@@ -83,6 +124,60 @@ inline String urldecode(const String &src) {
 	return decoded;
 }
 
+inline void refreshSdStatsDirect() {
+	if (!g_sdReady) {
+		g_cachedTotalBytes = 0;
+		g_cachedUsedBytes = 0;
+		return;
+	}
+	SdGuard guard;
+	g_cachedTotalBytes = SD.totalBytes();
+	g_cachedUsedBytes = SD.usedBytes();
+	g_lastSdStatsUpdate = millis();
+}
+
+inline void refreshSdStatsIfNeeded() {
+	if (!g_sdReady)
+		return;
+	if (millis() - g_lastSdStatsUpdate > 45000 || g_cachedTotalBytes == 0) {
+		refreshSdStatsDirect();
+	}
+}
+
+inline void cleanupOrphanedTempFiles(File dir, const String &parentPath) {
+	while (true) {
+		File entry = dir.openNextFile();
+		if (!entry)
+			break;
+		String name = entry.name();
+		String childPath = (parentPath == "/" ? "" : parentPath) + "/" + name;
+		bool isDir = entry.isDirectory();
+		entry.close();
+		if (isDir) {
+			File childDir = SD.open(childPath);
+			if (childDir) {
+				cleanupOrphanedTempFiles(childDir, childPath);
+				childDir.close();
+			}
+		} else {
+			String lower = name;
+			lower.toLowerCase();
+			if (lower.endsWith(".uploading") || lower.endsWith(".tmp") || lower.endsWith(".bak")) {
+				SD.remove(childPath);
+			}
+		}
+	}
+}
+
+inline void performStorageBootCleanup() {
+	SdGuard guard;
+	File root = SD.open("/");
+	if (root) {
+		cleanupOrphanedTempFiles(root, "/");
+		root.close();
+	}
+}
+
 inline bool initStorage() {
 	ensureSdMutex();
 	pinMode(SD_CS_PIN, OUTPUT);
@@ -92,26 +187,27 @@ inline bool initStorage() {
 	if (!g_sdReady) {
 		return false;
 	}
-	if (!SD.exists("/playlists")) {
-		SD.mkdir("/playlists");
+	{
+		SdGuard guard;
+		if (!SD.exists("/playlists")) {
+			SD.mkdir("/playlists");
+		}
 	}
+	performStorageBootCleanup();
+	refreshSdStatsDirect();
 	return true;
 }
 
 inline bool isSdReady() { return g_sdReady; }
 
 inline uint64_t getSdTotalBytes() {
-	if (!g_sdReady)
-		return 0;
-	SdGuard guard;
-	return SD.totalBytes();
+	refreshSdStatsIfNeeded();
+	return g_cachedTotalBytes;
 }
 
 inline uint64_t getSdUsedBytes() {
-	if (!g_sdReady)
-		return 0;
-	SdGuard guard;
-	return SD.usedBytes();
+	refreshSdStatsIfNeeded();
+	return g_cachedUsedBytes;
 }
 
 inline bool isJunk(String name) {
@@ -120,22 +216,18 @@ inline bool isJunk(String name) {
 			return true;
 		}
 	}
-
 	String lower = name;
 	lower.toLowerCase();
-
 	for (size_t i = 0; i < NUM_HIDDEN_EXACT_NAMES; i++) {
 		if (lower == HIDDEN_EXACT_NAMES[i]) {
 			return true;
 		}
 	}
-
 	for (size_t i = 0; i < NUM_HIDDEN_EXTENSIONS; i++) {
 		if (lower.endsWith(HIDDEN_EXTENSIONS[i])) {
 			return true;
 		}
 	}
-
 	return false;
 }
 
@@ -148,6 +240,10 @@ inline bool isProtectedStoragePath(const String &path) {
 	}
 	while (lower.endsWith("/")) {
 		lower = lower.substring(0, lower.length() - 1);
+	}
+
+	if (lower.length() == 0) {
+		return true;
 	}
 
 	for (size_t i = 0; i < NUM_HIDDEN_EXACT_NAMES; i++) {
@@ -170,7 +266,6 @@ inline bool isProtectedStoragePath(const String &path) {
 			return true;
 		}
 	}
-
 	return false;
 }
 
@@ -186,6 +281,8 @@ inline bool isSafePath(const String &path) {
 		return false;
 	if (path.indexOf("..") != -1)
 		return false;
+	if (path.indexOf('\\') != -1)
+		return false;
 	return true;
 }
 
@@ -193,6 +290,13 @@ inline bool isSafePlaylistName(const String &name) {
 	if (name.length() == 0 || name.length() > 64)
 		return false;
 	if (name.indexOf('/') != -1 || name.indexOf('\\') != -1 || name.indexOf("..") != -1)
+		return false;
+	String lower = name;
+	lower.toLowerCase();
+	if (lower.endsWith(".m3u")) {
+		lower = lower.substring(0, lower.length() - 4);
+	}
+	if (lower.length() == 0)
 		return false;
 	return true;
 }
@@ -203,32 +307,66 @@ inline String getPlaylistPath(String name) {
 	return "/playlists/" + name;
 }
 
-inline bool deleteStoragePath(const String &path) {
-	SdGuard guard;
-	if (isProtectedStoragePath(path)) {
+inline bool canMutateStoragePathUnderGuard(const String &path) {
+	if (!isSafePath(path))
+		return false;
+	if (path == "/" || path == "/playlists" || path == "/playlists/")
+		return false;
+	if (isProtectedStoragePath(path))
+		return false;
+	if (isAudioPathCurrentlyActive(path))
+		return false;
+	return true;
+}
+
+inline bool atomicReplaceFile(const String &tempPath, const String &targetPath) {
+	String bakPath = targetPath + ".bak";
+	if (SD.exists(bakPath)) {
+		SD.remove(bakPath);
+	}
+	bool hadTarget = SD.exists(targetPath);
+	if (hadTarget) {
+		if (!SD.rename(targetPath, bakPath)) {
+			return false;
+		}
+	}
+	if (!SD.rename(tempPath, targetPath)) {
+		if (hadTarget) {
+			SD.rename(bakPath, targetPath);
+		}
 		return false;
 	}
-	if (!SD.exists(path))
+	if (hadTarget) {
+		SD.remove(bakPath);
+	}
+	return true;
+}
+
+inline bool deleteStoragePathInternal(const String &path) {
+	if (!canMutateStoragePathUnderGuard(path)) {
 		return false;
+	}
+	if (!SD.exists(path)) {
+		return false;
+	}
 	File target = SD.open(path);
-	if (!target)
+	if (!target) {
 		return false;
+	}
 	if (!target.isDirectory()) {
 		target.close();
 		return SD.remove(path);
 	}
 	File entry = target.openNextFile();
 	while (entry) {
-		String childPath = entry.name();
-		if (!childPath.startsWith("/")) {
-			childPath = (path == "/" ? "" : path) + "/" + childPath;
-		}
+		String childName = entry.name();
+		String childPath = (path == "/" ? "" : path) + "/" + childName;
 		bool isDir = entry.isDirectory();
 		entry.close();
 		if (isDir) {
-			deleteStoragePath(childPath);
+			deleteStoragePathInternal(childPath);
 		} else {
-			if (!isProtectedStoragePath(childPath)) {
+			if (canMutateStoragePathUnderGuard(childPath)) {
 				SD.remove(childPath);
 			}
 		}
@@ -238,25 +376,13 @@ inline bool deleteStoragePath(const String &path) {
 	return SD.rmdir(path);
 }
 
-template <typename Callback>
-inline void iterateMp3Tracks(File dir, const String &parentPath, Callback cb) {
-	while (true) {
-		File entry = dir.openNextFile();
-		if (!entry)
-			break;
-		String name = entry.name();
-		if (isJunk(name)) {
-			entry.close();
-			continue;
-		}
-		String fullPath = (parentPath == "/" ? "" : parentPath) + "/" + name;
-		if (entry.isDirectory()) {
-			iterateMp3Tracks(entry, fullPath, cb);
-		} else if (isMp3(name)) {
-			cb(name, fullPath, entry.size());
-		}
-		entry.close();
+inline bool deleteStoragePath(const String &path) {
+	SdGuard guard;
+	bool ok = deleteStoragePathInternal(path);
+	if (ok) {
+		refreshSdStatsDirect();
 	}
+	return ok;
 }
 
 template <typename Callback> inline void iterateDirectory(File dir, Callback cb) {
@@ -275,19 +401,56 @@ template <typename Callback> inline void iterateDirectory(File dir, Callback cb)
 }
 
 inline void rebuildTrackCacheIfNeeded() {
-	if (g_trackCacheValid)
+	if (g_trackCacheValid || !g_sdReady)
 		return;
+
 	std::vector<TrackInfo> fresh;
-	{
-		SdGuard guard;
-		File root = SD.open("/");
-		if (root) {
-			iterateMp3Tracks(root, "/", [&](const String &name, const String &path, size_t sz) {
-				fresh.push_back({name, path, sz});
-			});
-			root.close();
+	fresh.reserve(64);
+	std::vector<String> dirsToScan;
+	dirsToScan.push_back("/");
+
+	while (!dirsToScan.empty() && fresh.size() < MAX_TRACKS_CACHE) {
+		String currentDir = dirsToScan.back();
+		dirsToScan.pop_back();
+
+		std::vector<String> localSubDirs;
+		std::vector<TrackInfo> localTracks;
+
+		{
+			SdGuard guard;
+			File dir = SD.open(currentDir);
+			if (dir && dir.isDirectory()) {
+				while (true) {
+					File entry = dir.openNextFile();
+					if (!entry)
+						break;
+					String name = entry.name();
+					if (!isJunk(name)) {
+						String fullPath = (currentDir == "/" ? "" : currentDir) + "/" + name;
+						if (entry.isDirectory()) {
+							localSubDirs.push_back(fullPath);
+						} else if (isMp3(name)) {
+							localTracks.push_back({name, fullPath, entry.size()});
+						}
+					}
+					entry.close();
+				}
+				dir.close();
+			}
 		}
+
+		for (const auto &t : localTracks) {
+			if (fresh.size() < MAX_TRACKS_CACHE) {
+				fresh.push_back(t);
+			}
+		}
+		for (const auto &sd : localSubDirs) {
+			dirsToScan.push_back(sd);
+		}
+
+		vTaskDelay(pdMS_TO_TICKS(2));
 	}
+
 	g_trackCache = fresh;
 	g_trackCacheValid = true;
 }
@@ -304,14 +467,14 @@ inline bool getCachedTrackSize(const String &path, size_t &sizeOut) {
 }
 
 inline void rebuildPlaylistCacheIfNeeded() {
-	if (g_playlistCacheValid)
+	if (g_playlistCacheValid || !g_sdReady)
 		return;
-	std::vector<PlaylistInfo> freshPlaylists;
-	std::map<String, std::vector<String>> freshIndex;
+
+	std::vector<String> playlistFiles;
 	{
 		SdGuard guard;
 		File dir = SD.open("/playlists");
-		if (dir) {
+		if (dir && dir.isDirectory()) {
 			while (true) {
 				File entry = dir.openNextFile();
 				if (!entry)
@@ -321,72 +484,54 @@ inline void rebuildPlaylistCacheIfNeeded() {
 				lower.toLowerCase();
 				if (!entry.isDirectory() && lower.endsWith(".m3u") && !name.startsWith(".") &&
 					!name.startsWith("._")) {
-					String fullPath = "/playlists/" + name;
-					String base = name;
-					base.replace(".m3u", "");
-					int count = 0;
-					File f = SD.open(fullPath, FILE_READ);
-					if (f) {
-						while (f.available()) {
-							String line = f.readStringUntil('\n');
-							line.trim();
-							if (line.length() > 0 && !line.startsWith("#")) {
-								count++;
-								freshIndex[line].push_back(base);
-							}
-						}
-						f.close();
+					if (playlistFiles.size() < MAX_PLAYLISTS_CACHE) {
+						playlistFiles.push_back(name);
 					}
-					freshPlaylists.push_back({name, count});
 				}
 				entry.close();
 			}
 			dir.close();
 		}
 	}
+
+	std::vector<PlaylistInfo> freshPlaylists;
+	std::map<String, std::vector<String>> freshIndex;
+
+	for (const String &name : playlistFiles) {
+		String fullPath = "/playlists/" + name;
+		String base = name;
+		base.replace(".m3u", "");
+		int count = 0;
+		std::vector<String> lines;
+
+		{
+			SdGuard guard;
+			File f = SD.open(fullPath, FILE_READ);
+			if (f) {
+				while (f.available()) {
+					String line = f.readStringUntil('\n');
+					line.trim();
+					if (line.length() > 0 && !line.startsWith("#")) {
+						lines.push_back(line);
+					}
+				}
+				f.close();
+			}
+		}
+
+		count = (int)lines.size();
+		for (const String &line : lines) {
+			if (freshIndex[line].size() < 16) {
+				freshIndex[line].push_back(base);
+			}
+		}
+		freshPlaylists.push_back({name, count});
+		vTaskDelay(pdMS_TO_TICKS(2));
+	}
+
 	g_playlistCache = freshPlaylists;
 	g_trackPlaylistIndex = freshIndex;
 	g_playlistCacheValid = true;
-}
-
-inline int countPlaylistTracks(const String &path) {
-	SdGuard guard;
-	File f = SD.open(path, FILE_READ);
-	if (!f)
-		return 0;
-	int count = 0;
-	while (f.available()) {
-		String line = f.readStringUntil('\n');
-		line.trim();
-		if (line.length() > 0 && !line.startsWith("#")) {
-			count++;
-		}
-	}
-	f.close();
-	return count;
-}
-
-template <typename Callback> inline void iteratePlaylists(Callback cb) {
-	SdGuard guard;
-	File dir = SD.open("/playlists");
-	if (!dir)
-		return;
-	while (true) {
-		File entry = dir.openNextFile();
-		if (!entry)
-			break;
-		String name = entry.name();
-		String lower = name;
-		lower.toLowerCase();
-		if (!entry.isDirectory() && lower.endsWith(".m3u") && !name.startsWith(".") &&
-			!name.startsWith("._")) {
-			String fullPath = "/playlists/" + name;
-			int tracks = countPlaylistTracks(fullPath);
-			cb(name, tracks);
-		}
-		entry.close();
-	}
-	dir.close();
 }
 
 template <typename Callback> inline bool iteratePlaylistTracks(const String &name, Callback cb) {
@@ -443,6 +588,7 @@ inline bool createPlaylist(const String &name) {
 	if (!f)
 		return false;
 	f.close();
+	refreshSdStatsDirect();
 	return true;
 }
 
@@ -452,23 +598,41 @@ inline bool renamePlaylist(const String &oldName, const String &newName) {
 	String newPath = getPlaylistPath(newName);
 	if (!SD.exists(oldPath) || SD.exists(newPath))
 		return false;
-	if (SD.rename(oldPath, newPath))
+	if (SD.rename(oldPath, newPath)) {
 		return true;
+	}
 	File src = SD.open(oldPath, FILE_READ);
 	if (!src)
 		return false;
-	File dst = SD.open(newPath, FILE_WRITE);
+	String tempPath = newPath + ".tmp";
+	if (SD.exists(tempPath)) {
+		SD.remove(tempPath);
+	}
+	File dst = SD.open(tempPath, FILE_WRITE);
 	if (!dst) {
 		src.close();
 		return false;
 	}
 	uint8_t buf[512];
+	bool writeFailed = false;
 	while (src.available()) {
 		size_t bytesRead = src.read(buf, sizeof(buf));
-		dst.write(buf, bytesRead);
+		size_t bytesWritten = dst.write(buf, bytesRead);
+		if (bytesWritten != bytesRead) {
+			writeFailed = true;
+			break;
+		}
 	}
 	src.close();
 	dst.close();
+	if (writeFailed) {
+		SD.remove(tempPath);
+		return false;
+	}
+	if (!atomicReplaceFile(tempPath, newPath)) {
+		SD.remove(tempPath);
+		return false;
+	}
 	SD.remove(oldPath);
 	return true;
 }
@@ -478,35 +642,74 @@ inline bool deletePlaylist(const String &name) {
 	String path = getPlaylistPath(name);
 	if (!SD.exists(path))
 		return false;
-	return SD.remove(path);
+	bool ok = SD.remove(path);
+	if (ok)
+		refreshSdStatsDirect();
+	return ok;
 }
 
 inline bool appendPlaylistTrack(const String &name, const String &trackPath) {
 	SdGuard guard;
 	String path = getPlaylistPath(name);
-	if (!SD.exists(path) || !isSafePath(trackPath))
+	if (!SD.exists(path) || !isSafePath(trackPath) || !isMp3(trackPath))
 		return false;
+	if (!SD.exists(trackPath))
+		return false;
+	File countF = SD.open(path, FILE_READ);
+	if (!countF)
+		return false;
+	size_t currentTracks = 0;
+	while (countF.available()) {
+		String l = countF.readStringUntil('\n');
+		l.trim();
+		if (l.length() > 0 && !l.startsWith("#")) {
+			currentTracks++;
+		}
+	}
+	countF.close();
+	if (currentTracks >= MAX_PLAYLIST_TRACKS) {
+		return false;
+	}
+
 	File f = SD.open(path, FILE_APPEND);
 	if (!f)
 		return false;
-	f.println(trackPath);
+	size_t written = f.println(trackPath);
 	f.close();
-	return true;
+	return (written > 0);
 }
 
 inline bool overwritePlaylistTracks(const String &name, const std::vector<String> &tracks) {
+	if (tracks.size() > MAX_PLAYLIST_TRACKS)
+		return false;
 	SdGuard guard;
 	String path = getPlaylistPath(name);
 	if (!SD.exists(path))
 		return false;
-	File f = SD.open(path, FILE_WRITE);
+	String tempPath = path + ".tmp";
+	if (SD.exists(tempPath)) {
+		SD.remove(tempPath);
+	}
+	File f = SD.open(tempPath, FILE_WRITE);
 	if (!f)
 		return false;
+	bool writeFailed = false;
 	for (const String &tp : tracks) {
-		if (isSafePath(tp)) {
-			f.println(tp);
+		if (isSafePath(tp) && isMp3(tp) && SD.exists(tp)) {
+			if (f.println(tp) == 0) {
+				writeFailed = true;
+				break;
+			}
 		}
 	}
 	f.close();
+	if (writeFailed) {
+		SD.remove(tempPath);
+		return false;
+	}
+	if (!atomicReplaceFile(tempPath, path)) {
+		SD.remove(tempPath);
+		return false;
+	}
 	return true;
 }
