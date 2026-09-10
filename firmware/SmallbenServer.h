@@ -745,8 +745,6 @@ inline void initServer() {
 	server.on("/api/playlists/tracks", HTTP_POST, handleApiPlaylistTracksAppend);
 
 	server.onNotFound(handleDynamicPlaylists);
-
-	server.begin();
 }
 
 inline void handleServer() { server.handleClient(); }

@@ -16,6 +16,9 @@
 #define RFID_MISO_PIN 4
 #define RFID_MOSI_PIN 13
 
+#define WIFI_BUTTON_PIN 32
+#define WIFI_LED_PIN 33
+
 const char *AP_SSID = "Smallben-Setup";
 const char *AP_PASS = "smallben123";
 const uint16_t HTTP_PORT = 80;

@@ -1,25 +1,28 @@
-#include <WiFi.h>
 #include "AudioEngine.h"
 #include "Config.h"
 #include "RfidEngine.h"
 #include "SmallbenServer.h"
 #include "Storage.h"
+#include "WifiManager.h"
 
 void setup() {
 	Serial.begin(115200);
 	delay(200);
-
-	WiFi.softAP(AP_SSID, AP_PASS);
 
 	initAudio();
 	initStorage();
 	initServer();
 	initRfid();
 
+	initWiFiControl();
+
 	startAudioTask();
 	startRfidTask();
 }
 
 void loop() {
-	handleServer();
+  handleWiFiButton();
+
+  if (isWiFiEnabled())
+		handleServer();
 }
