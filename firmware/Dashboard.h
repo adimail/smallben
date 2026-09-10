@@ -144,17 +144,17 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-mono);font-si
       <div class="reader-headline" id="readerHeadline">Waiting for disc...</div>
     </div>
     <div class="reader-controls">
-      <button class="btn-icon" id="btnAssignPrompt" style="display:none;background:var(--amber);color:#121110;font-weight:bold;border-radius:2px;padding:6px 10px" onclick="openMapModal(activeTagUid)">Assign</button>
-      <button class="btn-reader-action" id="btnReaderPlay" onclick="toggleCurrentPlay()">&#9654;</button>
-      <button class="btn-refresh" id="btnRefresh" onclick="fetchNow()" title="Refresh Status">&#x21bb;</button>
+      <button class="btn-icon" id="btnAssignPrompt" style="display:none;background:var(--amber);color:#121110;font-weight:bold;border-radius:2px;padding:6px 10px">Assign</button>
+      <button class="btn-reader-action" id="btnReaderPlay">&#9654;</button>
+      <button class="btn-refresh" id="btnRefresh" title="Refresh Status">&#x21bb;</button>
     </div>
   </div>
 
   <div class="nav-tabs">
-    <button class="nav-tab active" id="tabTracks" onclick="switchView('tracks')">Tracks</button>
-    <button class="nav-tab" id="tabDiscs" onclick="switchView('discs')">Discs</button>
-    <button class="nav-tab" id="tabPlaylists" onclick="switchView('playlists')">Playlists</button>
-    <button class="nav-tab" id="tabFiles" onclick="switchView('files')">Files</button>
+    <button class="nav-tab active" id="tabTracks">Tracks</button>
+    <button class="nav-tab" id="tabDiscs">Discs</button>
+    <button class="nav-tab" id="tabPlaylists">Playlists</button>
+    <button class="nav-tab" id="tabFiles">Files</button>
   </div>
 
   <div id="viewTracks" class="view active">
@@ -203,7 +203,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-mono);font-si
     <div class="head">
       <div class="title">File Storage</div>
       <button class="btn-link" id="btnUp">&#8593; Upload File</button>
-      <input type="file" id="fileInput" style="display:none">
+      <input type="file" id="fileInput" style="display:none" accept=".mp3">
     </div>
     <div class="progress-box" id="pBox">
       <div class="progress-bar" id="pBar"></div>
@@ -213,11 +213,11 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-mono);font-si
   </div>
 </div>
 
-<div class="drawer-overlay" id="mapModalOverlay" onclick="closeMapModal()"></div>
+<div class="drawer-overlay" id="mapModalOverlay"></div>
 <div class="drawer" id="mapModal">
   <div class="drawer-top">
     <div class="drawer-heading">Map RFID Disc</div>
-    <button class="drawer-close" onclick="closeMapModal()">&#10005;</button>
+    <button class="drawer-close" id="btnMapModalClose">&#10005;</button>
   </div>
   <div class="drawer-meta-list">
     <div class="drawer-meta-item">
@@ -230,7 +230,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-mono);font-si
     </div>
     <div class="drawer-meta-item">
       <span class="drawer-meta-label">Playback Target Type</span>
-      <select id="modalTypeSelect" onchange="onModalTypeChange()" style="background:var(--bg);border:1px solid var(--line);color:var(--text);padding:8px;font-family:inherit;font-size:12px;border-radius:2px">
+      <select id="modalTypeSelect" style="background:var(--bg);border:1px solid var(--line);color:var(--text);padding:8px;font-family:inherit;font-size:12px;border-radius:2px">
         <option value="track">Single Track</option>
         <option value="playlist">Playlist</option>
       </select>
@@ -240,14 +240,14 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-mono);font-si
       <select id="modalTargetSelect" style="background:var(--bg);border:1px solid var(--line);color:var(--text);padding:8px;font-family:inherit;font-size:12px;border-radius:2px"></select>
     </div>
   </div>
-  <button class="btn-play" onclick="submitDiscMapping()">Save Mapping</button>
+  <button class="btn-play" id="btnModalSave">Save Mapping</button>
 </div>
 
-<div class="drawer-overlay" id="drawerOverlay" onclick="closeDrawer()"></div>
+<div class="drawer-overlay" id="drawerOverlay"></div>
 <div class="drawer" id="trackDrawer">
   <div class="drawer-top">
     <div class="drawer-heading">Track Details</div>
-    <button class="drawer-close" onclick="closeDrawer()">&#10005;</button>
+    <button class="drawer-close" id="btnTrackDrawerClose">&#10005;</button>
   </div>
   <div class="drawer-name" id="dName"></div>
   <div class="drawer-meta-list">
@@ -340,6 +340,9 @@ const modalLabelInput = document.getElementById('modalLabelInput');
 const modalTypeSelect = document.getElementById('modalTypeSelect');
 const modalTargetLabel = document.getElementById('modalTargetLabel');
 const modalTargetSelect = document.getElementById('modalTargetSelect');
+const btnMapModalClose = document.getElementById('btnMapModalClose');
+const btnModalSave = document.getElementById('btnModalSave');
+const btnTrackDrawerClose = document.getElementById('btnTrackDrawerClose');
 
 function fmt(b){
   if(b < 1048576) return (b/1024).toFixed(1) + ' KB';
@@ -347,7 +350,7 @@ function fmt(b){
   return (b/1073741824).toFixed(1) + ' GB';
 }
 
-function cleanName(n){ return n.replace(/\.[^/.]+$/, ''); }
+function cleanName(n){ return n ? n.replace(/\.[^/.]+$/, '') : ''; }
 
 function fmtUptime(s){
   if(s < 60) return s + 's';
@@ -373,6 +376,11 @@ function switchView(viewName){
   if(viewName === 'playlists' && !currentPlaylist) loadPlaylists();
   if(viewName === 'tracks' && !tracks.length) loadLibrary();
 }
+
+tabTracks.onclick = () => switchView('tracks');
+tabDiscs.onclick = () => switchView('discs');
+tabPlaylists.onclick = () => switchView('playlists');
+tabFiles.onclick = () => switchView('files');
 
 function fetchNow(){
   if(btnRefresh) btnRefresh.classList.add('spin');
@@ -427,7 +435,7 @@ function fetchNow(){
         readerHeadline.textContent = 'Playing: ' + title;
         readerSub.textContent = d.rfid && d.rfid.present ? 'disc playing (' + d.rfid.uid + ')' : 'reader active';
         btnReaderPlay.style.display = 'flex';
-        btnReaderPlay.innerHTML = '&#10074;&#10074;';
+        btnReaderPlay.textContent = '\u275A\u275A';
       } else if(playerState === 'paused'){
         btnAssignPrompt.style.display = 'none';
         discDot.style.background = 'var(--amber)';
@@ -435,7 +443,7 @@ function fetchNow(){
         readerHeadline.textContent = 'Paused: ' + title;
         readerSub.textContent = 'reader paused';
         btnReaderPlay.style.display = 'flex';
-        btnReaderPlay.innerHTML = '&#9654;';
+        btnReaderPlay.textContent = '\u25B6';
       } else {
         btnAssignPrompt.style.display = 'none';
         discDot.style.background = 'var(--amber)';
@@ -457,6 +465,10 @@ function fetchNow(){
     });
 }
 
+btnRefresh.onclick = () => fetchNow();
+btnAssignPrompt.onclick = () => openMapModal(activeTagUid);
+btnReaderPlay.onclick = () => toggleCurrentPlay();
+
 function toggleCurrentPlay(){
   if(!playingPath) return;
   toggleTrackPlay(playingPath);
@@ -473,30 +485,70 @@ function toggleTrackPlay(path){
 }
 
 function renderTracksSlice(){
+  trackList.innerHTML = '';
   if(!tracks.length){
-    trackList.innerHTML = '<div class="msg">No tracks found on storage.</div>';
+    const msg = document.createElement('div');
+    msg.className = 'msg';
+    msg.textContent = 'No tracks found on storage.';
+    trackList.appendChild(msg);
     btnLoadMore.style.display = 'none';
     return;
   }
   const visible = showAllTracks ? tracks : tracks.slice(0, 5);
-  trackList.innerHTML = visible.map((t, i) => {
+  visible.forEach((t, i) => {
+    const row = document.createElement('div');
+    row.className = 'track-row';
+    row.onclick = () => openDrawer(i);
+
+    const num = document.createElement('span');
+    num.className = 'num';
+    num.textContent = String(i + 1).padStart(2, '0');
+
+    const main = document.createElement('div');
+    main.className = 'track-main';
+    const title = document.createElement('div');
+    title.className = 'track-title';
+    title.textContent = cleanName(t.name);
+    const sub = document.createElement('div');
+    sub.className = 'track-sub';
+    sub.textContent = t.path;
+    main.appendChild(title);
+    main.appendChild(sub);
+
+    const size = document.createElement('span');
+    size.className = 'track-size';
+    size.textContent = fmt(t.size);
+
+    const actions = document.createElement('div');
+    actions.className = 'track-actions';
+
+    const playBtn = document.createElement('button');
+    playBtn.className = 'btn-icon';
     const isThisPlaying = (playingPath === t.path && playerState === 'playing');
-    const playIcon = isThisPlaying ? '&#10074;&#10074;' : '&#9654;';
-    return `
-      <div class="track-row" onclick="openDrawer(${i})">
-        <span class="num">${String(i+1).padStart(2,'0')}</span>
-        <div class="track-main">
-          <div class="track-title">${cleanName(t.name)}</div>
-          <div class="track-sub">${t.path}</div>
-        </div>
-        <span class="track-size">${fmt(t.size)}</span>
-        <div class="track-actions">
-          <button class="btn-icon" onclick="event.stopPropagation();toggleTrackPlay('${t.path.replace(/'/g,"\\'")}')">${playIcon}</button>
-          <button class="btn-icon" onclick="event.stopPropagation();addToPlaylistPrompt('${t.path.replace(/'/g,"\\'")}')">+ list</button>
-        </div>
-      </div>
-    `;
-  }).join('');
+    playBtn.textContent = isThisPlaying ? '\u275A\u275A' : '\u25B6';
+    playBtn.onclick = (e) => {
+      e.stopPropagation();
+      toggleTrackPlay(t.path);
+    };
+
+    const addBtn = document.createElement('button');
+    addBtn.className = 'btn-icon';
+    addBtn.textContent = '+ list';
+    addBtn.onclick = (e) => {
+      e.stopPropagation();
+      addToPlaylistPrompt(t.path);
+    };
+
+    actions.appendChild(playBtn);
+    actions.appendChild(addBtn);
+
+    row.appendChild(num);
+    row.appendChild(main);
+    row.appendChild(size);
+    row.appendChild(actions);
+
+    trackList.appendChild(row);
+  });
 
   if(tracks.length > 5){
     btnLoadMore.style.display = 'block';
@@ -515,6 +567,9 @@ function closeDrawer(){
   drawerOverlay.classList.remove('open');
   trackDrawer.classList.remove('open');
 }
+
+btnTrackDrawerClose.onclick = closeDrawer;
+drawerOverlay.onclick = closeDrawer;
 
 async function openDrawer(idx){
   const t = tracks[idx];
@@ -536,12 +591,24 @@ async function openDrawer(idx){
   try{
     const res = await fetch('/api/track/playlists?path=' + encodeURIComponent(t.path));
     const matchNames = await res.json();
-    if(matchNames.length === 0){
-      dPlaylists.innerHTML = '<span>Part of 0 playlists</span>';
+    dPlaylists.innerHTML = '';
+    if(!matchNames || matchNames.length === 0){
+      const s = document.createElement('span');
+      s.textContent = 'Part of 0 playlists';
+      dPlaylists.appendChild(s);
     } else {
-      const countLabel = matchNames.length === 1 ? 'Part of 1 playlist:' : `Part of ${matchNames.length} playlists:`;
-      const tags = matchNames.map(name => `<span class="drawer-tag">${name}</span>`).join('');
-      dPlaylists.innerHTML = `<div>${countLabel}</div><div class="drawer-tags">${tags}</div>`;
+      const lbl = document.createElement('div');
+      lbl.textContent = matchNames.length === 1 ? 'Part of 1 playlist:' : `Part of ${matchNames.length} playlists:`;
+      const tags = document.createElement('div');
+      tags.className = 'drawer-tags';
+      matchNames.forEach(name => {
+        const tag = document.createElement('span');
+        tag.className = 'drawer-tag';
+        tag.textContent = name;
+        tags.appendChild(tag);
+      });
+      dPlaylists.appendChild(lbl);
+      dPlaylists.appendChild(tags);
     }
   }catch(e){
     dPlaylists.textContent = 'Unavailable';
@@ -553,29 +620,43 @@ function loadLibrary(){
     tracks = d;
     libCount.textContent = d.length + ' tracks on sd card';
     renderTracksSlice();
-  }).catch(()=>{ trackList.innerHTML = '<div class="msg">Error reading storage.</div>'; });
+  }).catch(()=>{
+    trackList.innerHTML = '<div class="msg">Error reading storage.</div>';
+  });
 }
 
 function loadPlaylists(){
   fetch('/api/playlists').then(r=>r.json()).then(d=>{
     playlists = d;
     plistCount.textContent = d.length + ' playlists';
+    plistCards.innerHTML = '';
     if(!d.length){
       plistCards.innerHTML = '<div class="msg">No playlists created yet.</div>';
       return;
     }
-    plistCards.innerHTML = d.map(p => {
+    d.forEach(p => {
       const base = p.name.replace('.m3u','');
-      return `
-        <div class="plist-card" onclick="openPlaylist('${base}')">
-          <span class="plist-title">${base}</span>
-          <div class="plist-meta">
-            <span>${p.trackCount} tracks</span>
-          </div>
-        </div>
-      `;
-    }).join('');
-  }).catch(()=>{ plistCards.innerHTML = '<div class="msg">Failed to load playlists.</div>'; });
+      const card = document.createElement('div');
+      card.className = 'plist-card';
+      card.onclick = () => openPlaylist(base);
+
+      const title = document.createElement('span');
+      title.className = 'plist-title';
+      title.textContent = base;
+
+      const meta = document.createElement('div');
+      meta.className = 'plist-meta';
+      const count = document.createElement('span');
+      count.textContent = p.trackCount + ' tracks';
+      meta.appendChild(count);
+
+      card.appendChild(title);
+      card.appendChild(meta);
+      plistCards.appendChild(card);
+    });
+  }).catch(()=>{
+    plistCards.innerHTML = '<div class="msg">Failed to load playlists.</div>';
+  });
 }
 
 function loadDiscs(){
@@ -583,46 +664,110 @@ function loadDiscs(){
     discs = d;
     discsCount.textContent = d.length + ' registered discs';
     renderDiscs();
-  }).catch(()=>{ discsList.innerHTML = '<div class="msg">Failed to load discs registry.</div>'; });
+  }).catch(()=>{
+    discsList.innerHTML = '<div class="msg">Failed to load discs registry.</div>';
+  });
 }
 
 function renderDiscs(){
-  let banner = '';
+  discsList.innerHTML = '';
   if(activeTagUid && !activeTagMapped){
-    banner = `
-      <div style="margin-bottom:16px;padding:14px 16px;background:var(--panel);border:1px solid var(--amber);border-radius:2px;display:flex;justify-content:space-between;align-items:center">
-        <div>
-          <div style="font-size:10px;color:var(--amber);text-transform:uppercase;letter-spacing:0.05em">Active Unmapped Tag</div>
-          <div style="font-size:14px;color:var(--text);font-weight:bold">${activeTagUid}</div>
-        </div>
-        <button class="btn-icon" style="background:var(--amber);color:#121110;font-weight:bold;padding:6px 12px;border-radius:2px" onclick="openMapModal('${activeTagUid}')">Map Disc</button>
-      </div>
-    `;
+    const banner = document.createElement('div');
+    banner.style.marginBottom = '16px';
+    banner.style.padding = '14px 16px';
+    banner.style.background = 'var(--panel)';
+    banner.style.border = '1px solid var(--amber)';
+    banner.style.borderRadius = '2px';
+    banner.style.display = 'flex';
+    banner.style.justifyContent = 'space-between';
+    banner.style.alignItems = 'center';
+
+    const bLeft = document.createElement('div');
+    const bSub = document.createElement('div');
+    bSub.style.fontSize = '10px';
+    bSub.style.color = 'var(--amber)';
+    bSub.style.textTransform = 'uppercase';
+    bSub.style.letterSpacing = '0.05em';
+    bSub.textContent = 'Active Unmapped Tag';
+    const bVal = document.createElement('div');
+    bVal.style.fontSize = '14px';
+    bVal.style.color = 'var(--text)';
+    bVal.style.fontWeight = 'bold';
+    bVal.textContent = activeTagUid;
+    bLeft.appendChild(bSub);
+    bLeft.appendChild(bVal);
+
+    const bBtn = document.createElement('button');
+    bBtn.className = 'btn-icon';
+    bBtn.style.background = 'var(--amber)';
+    bBtn.style.color = '#121110';
+    bBtn.style.fontWeight = 'bold';
+    bBtn.style.padding = '6px 12px';
+    bBtn.style.borderRadius = '2px';
+    bBtn.textContent = 'Map Disc';
+    bBtn.onclick = () => openMapModal(activeTagUid);
+
+    banner.appendChild(bLeft);
+    banner.appendChild(bBtn);
+    discsList.appendChild(banner);
   }
+
   if(!discs.length && !activeTagUid){
-    discsList.innerHTML = banner + '<div class="msg">No discs mapped yet. Place an NFC tag near the reader to map it.</div>';
+    const msg = document.createElement('div');
+    msg.className = 'msg';
+    msg.textContent = 'No discs mapped yet. Place an NFC tag near the reader to map it.';
+    discsList.appendChild(msg);
     return;
   }
-  const rows = discs.map(d => {
-    const isPresent = (activeTagUid === d.uid);
-    return `
-      <div class="disc-row ${isPresent ? 'present' : ''}">
-        <div class="disc-main">
-          <div class="disc-title">${d.label || d.target}</div>
-          <div class="disc-sub">
-            <span class="badge-type">${d.type}</span>
-            <span style="color:var(--dim);margin-right:8px">${d.uid}</span>
-            <span>${d.target}</span>
-          </div>
-        </div>
-        <div class="track-actions">
-          <button class="btn-icon" onclick="openMapModal('${d.uid}', '${d.type}', '${d.target.replace(/'/g,"\\'")}', '${(d.label||'').replace(/'/g,"\\'")}')">Edit</button>
-          <button class="btn-icon btn-del" onclick="deleteDiscMapping('${d.uid}')">&#10005;</button>
-        </div>
-      </div>
-    `;
-  }).join('');
-  discsList.innerHTML = banner + rows;
+
+  discs.forEach(d => {
+    const row = document.createElement('div');
+    row.className = 'disc-row' + (activeTagUid === d.uid ? ' present' : '');
+
+    const main = document.createElement('div');
+    main.className = 'disc-main';
+    const title = document.createElement('div');
+    title.className = 'disc-title';
+    title.textContent = d.label || d.target;
+
+    const sub = document.createElement('div');
+    sub.className = 'disc-sub';
+    const badge = document.createElement('span');
+    badge.className = 'badge-type';
+    badge.textContent = d.type;
+    const uidSpan = document.createElement('span');
+    uidSpan.style.color = 'var(--dim)';
+    uidSpan.style.marginRight = '8px';
+    uidSpan.textContent = d.uid;
+    const targetSpan = document.createElement('span');
+    targetSpan.textContent = d.target;
+
+    sub.appendChild(badge);
+    sub.appendChild(uidSpan);
+    sub.appendChild(targetSpan);
+    main.appendChild(title);
+    main.appendChild(sub);
+
+    const actions = document.createElement('div');
+    actions.className = 'track-actions';
+
+    const editBtn = document.createElement('button');
+    editBtn.className = 'btn-icon';
+    editBtn.textContent = 'Edit';
+    editBtn.onclick = () => openMapModal(d.uid, d.type, d.target, d.label || '');
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'btn-icon btn-del';
+    delBtn.textContent = '\u2715';
+    delBtn.onclick = () => deleteDiscMapping(d.uid);
+
+    actions.appendChild(editBtn);
+    actions.appendChild(delBtn);
+
+    row.appendChild(main);
+    row.appendChild(actions);
+    discsList.appendChild(row);
+  });
 }
 
 function deleteDiscMapping(uid){
@@ -656,9 +801,9 @@ function closeMapModal(){
   mapModal.classList.remove('open');
 }
 
-function onModalTypeChange(){
-  populateModalTargets(modalTypeSelect.value);
-}
+btnMapModalClose.onclick = closeMapModal;
+mapModalOverlay.onclick = closeMapModal;
+modalTypeSelect.onchange = () => populateModalTargets(modalTypeSelect.value);
 
 function populateModalTargets(type, selected = ''){
   modalTargetSelect.innerHTML = '';
@@ -684,7 +829,7 @@ function populateModalTargets(type, selected = ''){
   }
 }
 
-function submitDiscMapping(){
+btnModalSave.onclick = () => {
   const uid = modalUidVal.textContent;
   const label = modalLabelInput.value.trim();
   const type = modalTypeSelect.value;
@@ -708,7 +853,7 @@ function submitDiscMapping(){
       alert(d.error || 'Failed to save mapping');
     }
   }).catch(()=>alert('Network error'));
-}
+};
 
 function openPlaylist(name){
   currentPlaylist = name;
@@ -727,30 +872,70 @@ function openPlaylist(name){
 
 function renderPlaylistTracks(){
   plistDetailCount.textContent = currentPlaylistTracks.length + ' tracks';
+  detailTrackList.innerHTML = '';
   if(!currentPlaylistTracks.length){
     detailTrackList.innerHTML = '<div class="msg">This playlist is empty.</div>';
     return;
   }
-  detailTrackList.innerHTML = currentPlaylistTracks.map((t, i) => {
+  currentPlaylistTracks.forEach((t, i) => {
+    const row = document.createElement('div');
+    row.className = 'track-row';
+
+    const num = document.createElement('span');
+    num.className = 'num';
+    num.textContent = String(i + 1).padStart(2, '0');
+
+    const main = document.createElement('div');
+    main.className = 'track-main';
+    const title = document.createElement('div');
+    title.className = 'track-title';
+    title.textContent = cleanName(t.name);
+    const sub = document.createElement('div');
+    sub.className = 'track-sub';
+    sub.textContent = t.path;
+    main.appendChild(title);
+    main.appendChild(sub);
+
+    const size = document.createElement('span');
+    size.className = 'track-size';
+    size.textContent = fmt(t.size);
+
+    const actions = document.createElement('div');
+    actions.className = 'track-actions';
+
+    const playBtn = document.createElement('button');
+    playBtn.className = 'btn-icon';
     const isThisPlaying = (playingPath === t.path && playerState === 'playing');
-    const playIcon = isThisPlaying ? '&#10074;&#10074;' : '&#9654;';
-    return `
-      <div class="track-row">
-        <span class="num">${String(i+1).padStart(2,'0')}</span>
-        <div class="track-main">
-          <div class="track-title">${cleanName(t.name)}</div>
-          <div class="track-sub">${t.path}</div>
-        </div>
-        <span class="track-size">${fmt(t.size)}</span>
-        <div class="track-actions">
-          <button class="btn-icon" onclick="toggleTrackPlay('${t.path.replace(/'/g,"\\'")}')">${playIcon}</button>
-          <button class="btn-icon" onclick="moveTrack(${i}, -1)">&#9650;</button>
-          <button class="btn-icon" onclick="moveTrack(${i}, 1)">&#9660;</button>
-          <button class="btn-icon btn-del" onclick="removeTrack(${i})">&#10005;</button>
-        </div>
-      </div>
-    `;
-  }).join('');
+    playBtn.textContent = isThisPlaying ? '\u275A\u275A' : '\u25B6';
+    playBtn.onclick = () => toggleTrackPlay(t.path);
+
+    const upBtn = document.createElement('button');
+    upBtn.className = 'btn-icon';
+    upBtn.textContent = '\u25B2';
+    upBtn.onclick = () => moveTrack(i, -1);
+
+    const downBtn = document.createElement('button');
+    downBtn.className = 'btn-icon';
+    downBtn.textContent = '\u25BC';
+    downBtn.onclick = () => moveTrack(i, 1);
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'btn-icon btn-del';
+    delBtn.textContent = '\u2715';
+    delBtn.onclick = () => removeTrack(i);
+
+    actions.appendChild(playBtn);
+    actions.appendChild(upBtn);
+    actions.appendChild(downBtn);
+    actions.appendChild(delBtn);
+
+    row.appendChild(num);
+    row.appendChild(main);
+    row.appendChild(size);
+    row.appendChild(actions);
+
+    detailTrackList.appendChild(row);
+  });
 }
 
 function savePlaylistOrder(){
@@ -866,7 +1051,7 @@ function showAddPrompt(path){
 
 function isDbOrSysFile(name){
   const n = name.toLowerCase();
-  return n.endsWith('.db') || n.endsWith('.dat') || n.endsWith('.idx') || n.endsWith('.bin') || n.endsWith('.sys') || n === 'thumbs.db' || n === '.ds_store' || n === 'discs.csv';
+  return n.endsWith('.db') || n.endsWith('.dat') || n.endsWith('.idx') || n.endsWith('.bin') || n.endsWith('.sys') || n.endsWith('.tmp') || n.endsWith('.uploading') || n === 'thumbs.db' || n === '.ds_store' || n === 'discs.csv';
 }
 
 function fetchLevel(path){
@@ -916,15 +1101,33 @@ function createTreeItem(node, parentPath){
     li.appendChild(row);
     li.appendChild(childUl);
   } else {
-    li.innerHTML = `
-      <div class="tree-row">
-        <div class="tree-left">
-          <a class="file-dl" href="/api/download?path=${encodeURIComponent(full)}" download="${node.name}">${node.name}</a>
-          <span class="track-size" style="font-size:11px">${fmt(node.size)}</span>
-        </div>
-        <button class="btn-icon btn-del" onclick="confirmDelete('${full.replace(/'/g,"\\'")}')">&#10005;</button>
-      </div>
-    `;
+    const row = document.createElement('div');
+    row.className = 'tree-row';
+    const left = document.createElement('div');
+    left.className = 'tree-left';
+
+    const a = document.createElement('a');
+    a.className = 'file-dl';
+    a.href = '/api/download?path=' + encodeURIComponent(full);
+    a.download = node.name;
+    a.textContent = node.name;
+
+    const sz = document.createElement('span');
+    sz.className = 'track-size';
+    sz.style.fontSize = '11px';
+    sz.textContent = fmt(node.size);
+
+    left.appendChild(a);
+    left.appendChild(sz);
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'btn-icon btn-del';
+    delBtn.textContent = '\u2715';
+    delBtn.onclick = () => confirmDelete(full);
+
+    row.appendChild(left);
+    row.appendChild(delBtn);
+    li.appendChild(row);
   }
   return li;
 }
@@ -960,6 +1163,11 @@ btnUp.onclick = () => fileInput.click();
 fileInput.onchange = () => {
   if(!fileInput.files || fileInput.files.length === 0) return;
   const file = fileInput.files[0];
+  if(!file.name.toLowerCase().endsWith('.mp3')){
+    alert('Only MP3 audio files can be uploaded.');
+    fileInput.value = '';
+    return;
+  }
   if(file.size > 31457280){
     alert('File exceeds the 30MB size limit.');
     fileInput.value = '';

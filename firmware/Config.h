@@ -16,17 +16,23 @@
 #define RFID_MISO_PIN 4
 #define RFID_MOSI_PIN 13
 
+#define WIFI_BUTTON_PIN 32
+#define WIFI_LED_PIN 33
+
 const char *AP_SSID = "Smallben-Setup";
 const char *AP_PASS = "smallben123";
 const uint16_t HTTP_PORT = 80;
 
 const size_t MAX_UPLOAD_SIZE = 31457280;
+const size_t MAX_JSON_BODY_SIZE = 16384;
 
-const char *const HIDDEN_EXACT_NAMES[] = {"playlists", "system volume information", "thumbs.db",
-										  ".ds_store", "discs.csv"};
+const char *const HIDDEN_EXACT_NAMES[] = {
+	"playlists",	"system volume information", "thumbs.db", ".ds_store", "discs.csv", "discs.tmp",
+	"discs.csv.bak"};
 const size_t NUM_HIDDEN_EXACT_NAMES = sizeof(HIDDEN_EXACT_NAMES) / sizeof(HIDDEN_EXACT_NAMES[0]);
 
-const char *const HIDDEN_EXTENSIONS[] = {".m3u", ".db", ".dat", ".idx", ".bin", ".sys"};
+const char *const HIDDEN_EXTENSIONS[] = {".m3u", ".db",	 ".dat",	   ".idx", ".bin",
+										 ".sys", ".tmp", ".uploading", ".bak"};
 const size_t NUM_HIDDEN_EXTENSIONS = sizeof(HIDDEN_EXTENSIONS) / sizeof(HIDDEN_EXTENSIONS[0]);
 
 const char *const HIDDEN_PREFIXES[] = {".", "._"};
@@ -36,3 +42,8 @@ const uint32_t AUDIO_TASK_STACK_SIZE = 8192;
 const UBaseType_t AUDIO_TASK_PRIORITY = 3;
 const BaseType_t AUDIO_TASK_CORE = 0;
 const TickType_t AUDIO_TASK_DELAY_TICKS = 1;
+
+const size_t MAX_TRACKS_CACHE = 512;
+const size_t MAX_PLAYLISTS_CACHE = 64;
+const size_t MAX_PLAYLIST_TRACKS = 128;
+const size_t MAX_DISCS_MAPPINGS = 128;

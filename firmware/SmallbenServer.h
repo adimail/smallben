@@ -6,6 +6,7 @@
 #include "Storage.h"
 #include <Arduino.h>
 #include <WebServer.h>
+#include <WiFi.h>
 #include <vector>
 
 WebServer server(HTTP_PORT);
@@ -13,15 +14,46 @@ WebServer server(HTTP_PORT);
 static File uploadFile;
 static bool uploadAborted = false;
 static size_t uploadBytesWritten = 0;
+static String uploadFinalPath = "";
+static String uploadTempPath = "";
 
 inline String jsonEscape(const String &in) {
 	String out;
-	out.reserve(in.length() + 4);
+	out.reserve(in.length() + 8);
 	for (size_t i = 0; i < in.length(); i++) {
 		char c = in[i];
-		if (c == '"' || c == '\\')
-			out += '\\';
-		out += c;
+		switch (c) {
+		case '"':
+			out += "\\\"";
+			break;
+		case '\\':
+			out += "\\\\";
+			break;
+		case '\b':
+			out += "\\b";
+			break;
+		case '\f':
+			out += "\\f";
+			break;
+		case '\n':
+			out += "\\n";
+			break;
+		case '\r':
+			out += "\\r";
+			break;
+		case '\t':
+			out += "\\t";
+			break;
+		default:
+			if ((uint8_t)c < 0x20) {
+				char buf[8];
+				snprintf(buf, sizeof(buf), "\\u%04x", (uint8_t)c);
+				out += buf;
+			} else {
+				out += c;
+			}
+			break;
+		}
 	}
 	return out;
 }
@@ -37,10 +69,35 @@ inline String extractJsonString(const String &json, const String &key) {
 	int q1 = json.indexOf('"', colon + 1);
 	if (q1 == -1)
 		return "";
-	int q2 = json.indexOf('"', q1 + 1);
-	if (q2 == -1)
-		return "";
-	return json.substring(q1 + 1, q2);
+	String result = "";
+	bool escape = false;
+	for (int i = q1 + 1; i < (int)json.length(); i++) {
+		char c = json[i];
+		if (escape) {
+			if (c == '"' || c == '\\' || c == '/')
+				result += c;
+			else if (c == 'b')
+				result += '\b';
+			else if (c == 'f')
+				result += '\f';
+			else if (c == 'n')
+				result += '\n';
+			else if (c == 'r')
+				result += '\r';
+			else if (c == 't')
+				result += '\t';
+			else
+				result += c;
+			escape = false;
+		} else if (c == '\\') {
+			escape = true;
+		} else if (c == '"') {
+			return result;
+		} else {
+			result += c;
+		}
+	}
+	return "";
 }
 
 inline std::vector<String> extractJsonArray(const String &json, const String &key) {
@@ -50,8 +107,8 @@ inline std::vector<String> extractJsonArray(const String &json, const String &ke
 	if (kpos == -1)
 		return res;
 	int b1 = json.indexOf('[', kpos + needle.length());
-	int b2 = json.indexOf(']', b1 + 1);
-	if (b1 == -1 || b2 == -1)
+	int b2 = json.lastIndexOf(']');
+	if (b1 == -1 || b2 == -1 || b2 <= b1)
 		return res;
 	String arr = json.substring(b1 + 1, b2);
 	int cur = 0;
@@ -59,11 +116,29 @@ inline std::vector<String> extractJsonArray(const String &json, const String &ke
 		int q1 = arr.indexOf('"', cur);
 		if (q1 == -1)
 			break;
-		int q2 = arr.indexOf('"', q1 + 1);
-		if (q2 == -1)
+		String item = "";
+		bool escape = false;
+		int endIdx = -1;
+		for (int i = q1 + 1; i < (int)arr.length(); i++) {
+			char c = arr[i];
+			if (escape) {
+				item += c;
+				escape = false;
+			} else if (c == '\\') {
+				escape = true;
+			} else if (c == '"') {
+				endIdx = i;
+				break;
+			} else {
+				item += c;
+			}
+		}
+		if (endIdx != -1) {
+			res.push_back(item);
+			cur = endIdx + 1;
+		} else {
 			break;
-		res.push_back(arr.substring(q1 + 1, q2));
-		cur = q2 + 1;
+		}
 	}
 	return res;
 }
@@ -71,20 +146,28 @@ inline std::vector<String> extractJsonArray(const String &json, const String &ke
 inline void handleRoot() { server.send_P(200, "text/html", DASHBOARD_HTML); }
 
 inline void handleNow() {
-	String path = getAudioPath();
-	String name = "";
-	int slash = path.lastIndexOf('/');
+	AudioStateSnapshot audio = getAudioSnapshot();
+	RfidStateSnapshot rfid = getRfidSnapshot();
+
+	String pathStr(audio.path);
+	String nameStr = "";
+	int slash = pathStr.lastIndexOf('/');
 	if (slash != -1) {
-		name = path.substring(slash + 1);
+		nameStr = pathStr.substring(slash + 1);
 	} else {
-		name = path;
+		nameStr = pathStr;
+	}
+
+	String stateStr = "stopped";
+	if (audio.isPlaying) {
+		stateStr = audio.isPaused ? "paused" : "playing";
 	}
 
 	String json = "{";
 	json += "\"player\":{";
-	json += "\"state\":\"" + getAudioState() + "\",";
-	json += "\"path\":\"" + jsonEscape(path) + "\",";
-	json += "\"name\":\"" + jsonEscape(name) + "\"";
+	json += "\"state\":\"" + stateStr + "\",";
+	json += "\"path\":\"" + jsonEscape(pathStr) + "\",";
+	json += "\"name\":\"" + jsonEscape(nameStr) + "\"";
 	json += "},";
 	json += "\"sd\":{";
 	json += "\"ready\":" + String(isSdReady() ? "true" : "false") + ",";
@@ -92,12 +175,12 @@ inline void handleNow() {
 	json += "\"usedBytes\":" + String((unsigned long long)getSdUsedBytes());
 	json += "},";
 	json += "\"rfid\":{";
-	json += "\"present\":" + String(isRfidPresent() ? "true" : "false") + ",";
-	json += "\"uid\":\"" + jsonEscape(getRfidUid()) + "\",";
-	json += "\"mapped\":" + String(isRfidMapped() ? "true" : "false") + ",";
-	json += "\"type\":\"" + jsonEscape(getRfidType()) + "\",";
-	json += "\"target\":\"" + jsonEscape(getRfidTarget()) + "\",";
-	json += "\"label\":\"" + jsonEscape(getRfidLabel()) + "\"";
+	json += "\"present\":" + String(rfid.present ? "true" : "false") + ",";
+	json += "\"uid\":\"" + jsonEscape(String(rfid.uid)) + "\",";
+	json += "\"mapped\":" + String(rfid.mapped ? "true" : "false") + ",";
+	json += "\"type\":\"" + jsonEscape(String(rfid.type)) + "\",";
+	json += "\"target\":\"" + jsonEscape(String(rfid.target)) + "\",";
+	json += "\"label\":\"" + jsonEscape(String(rfid.label)) + "\"";
 	json += "},";
 	json += "\"system\":{";
 	json += "\"freeHeap\":" + String(ESP.getFreeHeap()) + ",";
@@ -109,24 +192,28 @@ inline void handleNow() {
 }
 
 inline void handleApiDiscsGet() {
+	std::vector<DiscMapping> list = getDiscMappingsSnapshot();
 	server.setContentLength(CONTENT_LENGTH_UNKNOWN);
 	server.send(200, "application/json", "");
 	server.sendContent("[");
 	bool first = true;
-	for (const auto &pair : g_discMappings) {
+	for (const auto &item : list) {
 		if (!first)
 			server.sendContent(",");
 		first = false;
-		server.sendContent("{\"uid\":\"" + jsonEscape(pair.second.uid) + "\",\"type\":\"" +
-						   jsonEscape(pair.second.type) + "\",\"target\":\"" +
-						   jsonEscape(pair.second.target) + "\",\"label\":\"" +
-						   jsonEscape(pair.second.label) + "\"}");
+		server.sendContent("{\"uid\":\"" + jsonEscape(item.uid) + "\",\"type\":\"" +
+						   jsonEscape(item.type) + "\",\"target\":\"" + jsonEscape(item.target) +
+						   "\",\"label\":\"" + jsonEscape(item.label) + "\"}");
 	}
 	server.sendContent("]");
 	server.sendContent("");
 }
 
 inline void handleApiDiscsMap() {
+	if (server.hasArg("plain") && server.arg("plain").length() > MAX_JSON_BODY_SIZE) {
+		server.send(413, "application/json", "{\"error\":\"payload too large\"}");
+		return;
+	}
 	String body = server.arg("plain");
 	String uid = extractJsonString(body, "uid");
 	String type = extractJsonString(body, "type");
@@ -135,7 +222,8 @@ inline void handleApiDiscsMap() {
 	if (mapDisc(uid, type, target, label)) {
 		server.send(200, "application/json", "{\"status\":\"ok\"}");
 	} else {
-		server.send(400, "application/json", "{\"error\":\"invalid parameters\"}");
+		server.send(400, "application/json",
+					"{\"error\":\"invalid parameters, table full, or write failed\"}");
 	}
 }
 
@@ -144,6 +232,10 @@ inline void handleApiDiscsDelete() {
 	if (server.hasArg("uid")) {
 		uid = server.arg("uid");
 	} else if (server.hasArg("plain")) {
+		if (server.arg("plain").length() > MAX_JSON_BODY_SIZE) {
+			server.send(413, "application/json", "{\"error\":\"payload too large\"}");
+			return;
+		}
 		uid = extractJsonString(server.arg("plain"), "uid");
 	}
 	if (unmapDisc(uid)) {
@@ -206,30 +298,43 @@ inline void handleApiTree() {
 		server.send(400, "application/json", "{\"error\":\"invalid path\"}");
 		return;
 	}
-	SdGuard guard;
-	File dir = SD.open(path);
-	if (!dir || !dir.isDirectory()) {
-		if (dir)
-			dir.close();
-		server.send(404, "application/json", "[]");
-		return;
+	struct TreeNode {
+		String name;
+		bool isDir;
+		size_t size;
+	};
+	std::vector<TreeNode> nodes;
+	{
+		SdGuard guard;
+		File dir = SD.open(path);
+		if (!dir || !dir.isDirectory()) {
+			if (dir)
+				dir.close();
+			server.send(404, "application/json", "[]");
+			return;
+		}
+		iterateDirectory(dir, [&](const String &name, bool isDir, size_t sz) {
+			if (nodes.size() < 256) {
+				nodes.push_back({name, isDir, sz});
+			}
+		});
+		dir.close();
 	}
 	server.setContentLength(CONTENT_LENGTH_UNKNOWN);
 	server.send(200, "application/json", "");
 	server.sendContent("[");
 	bool first = true;
-	iterateDirectory(dir, [&](const String &name, bool isDir, size_t sz) {
+	for (const auto &n : nodes) {
 		if (!first)
 			server.sendContent(",");
 		first = false;
-		if (isDir) {
-			server.sendContent("{\"name\":\"" + jsonEscape(name) + "\",\"type\":\"dir\"}");
+		if (n.isDir) {
+			server.sendContent("{\"name\":\"" + jsonEscape(n.name) + "\",\"type\":\"dir\"}");
 		} else {
-			server.sendContent("{\"name\":\"" + jsonEscape(name) +
-							   "\",\"type\":\"file\",\"size\":" + String(sz) + "}");
+			server.sendContent("{\"name\":\"" + jsonEscape(n.name) +
+							   "\",\"type\":\"file\",\"size\":" + String(n.size) + "}");
 		}
-	});
-	dir.close();
+	}
 	server.sendContent("]");
 	server.sendContent("");
 }
@@ -240,16 +345,13 @@ inline void handleApiDelete() {
 		return;
 	}
 	String path = server.arg("path");
-	if (!isSafePath(path)) {
-		server.send(400, "application/json", "{\"error\":\"invalid path\"}");
-		return;
-	}
 	if (deleteStoragePath(path)) {
 		invalidateTrackCache();
 		invalidatePlaylistCache();
 		server.send(200, "application/json", "{\"status\":\"ok\"}");
 	} else {
-		server.send(500, "application/json", "{\"error\":\"delete failed\"}");
+		server.send(403, "application/json",
+					"{\"error\":\"delete failed, protected, or currently active\"}");
 	}
 }
 
@@ -259,29 +361,64 @@ inline void handleApiDownload() {
 		return;
 	}
 	String path = server.arg("path");
-	if (!isSafePath(path)) {
+	if (!isSafePath(path) || isProtectedStoragePath(path)) {
 		server.send(404, "text/plain", "File not found");
 		return;
 	}
-	SdGuard guard;
-	if (!SD.exists(path)) {
-		server.send(404, "text/plain", "File not found");
-		return;
+	File file;
+	size_t fileSize = 0;
+	{
+		SdGuard guard;
+		if (!SD.exists(path)) {
+			server.send(404, "text/plain", "File not found");
+			return;
+		}
+		file = SD.open(path, FILE_READ);
+		if (!file || file.isDirectory()) {
+			if (file)
+				file.close();
+			server.send(400, "text/plain", "Cannot download directory");
+			return;
+		}
+		fileSize = file.size();
 	}
-	File file = SD.open(path, FILE_READ);
-	if (!file || file.isDirectory()) {
-		if (file)
-			file.close();
-		server.send(400, "text/plain", "Cannot download directory");
-		return;
-	}
+
 	String filename = path;
 	int lastSlash = path.lastIndexOf('/');
 	if (lastSlash != -1)
 		filename = path.substring(lastSlash + 1);
+
 	server.sendHeader("Content-Disposition", "attachment; filename=\"" + filename + "\"");
-	server.streamFile(file, "application/octet-stream");
-	file.close();
+	server.setContentLength(fileSize);
+	server.send(200, "application/octet-stream", "");
+
+	WiFiClient client = server.client();
+	uint8_t buffer[2048];
+	size_t bytesSent = 0;
+
+	while (bytesSent < fileSize && client.connected()) {
+		size_t toRead = sizeof(buffer);
+		if (bytesSent + toRead > fileSize) {
+			toRead = fileSize - bytesSent;
+		}
+		size_t actualRead = 0;
+		{
+			SdGuard guard;
+			actualRead = file.read(buffer, toRead);
+		}
+		if (actualRead == 0)
+			break;
+		size_t written = client.write(buffer, actualRead);
+		bytesSent += written;
+		if (written != actualRead)
+			break;
+		vTaskDelay(pdMS_TO_TICKS(1));
+	}
+
+	{
+		SdGuard guard;
+		file.close();
+	}
 }
 
 inline void handleFileUploadProcess() {
@@ -289,6 +426,9 @@ inline void handleFileUploadProcess() {
 	if (upload.status == UPLOAD_FILE_START) {
 		uploadAborted = false;
 		uploadBytesWritten = 0;
+		uploadFinalPath = "";
+		uploadTempPath = "";
+
 		String targetDir = "/";
 		if (server.hasArg("path")) {
 			String p = server.arg("path");
@@ -303,16 +443,24 @@ inline void handleFileUploadProcess() {
 		if (slashIndex != -1)
 			filename = filename.substring(slashIndex + 1);
 
-		String fullPath = (targetDir == "/" ? "" : targetDir) + "/" + filename;
-		if (isProtectedStoragePath(fullPath)) {
+		if (!isMp3(filename)) {
 			uploadAborted = true;
 			return;
 		}
+
+		uploadFinalPath = (targetDir == "/" ? "" : targetDir) + "/" + filename;
+		uploadTempPath = uploadFinalPath + ".uploading";
+
 		SdGuard guard;
-		if (SD.exists(fullPath)) {
-			SD.remove(fullPath);
+		if (!canMutateStoragePathUnderGuard(uploadFinalPath)) {
+			uploadAborted = true;
+			return;
 		}
-		uploadFile = SD.open(fullPath, FILE_WRITE);
+
+		if (SD.exists(uploadTempPath)) {
+			SD.remove(uploadTempPath);
+		}
+		uploadFile = SD.open(uploadTempPath, FILE_WRITE);
 		if (!uploadFile) {
 			uploadAborted = true;
 		}
@@ -323,9 +471,19 @@ inline void handleFileUploadProcess() {
 				uploadAborted = true;
 				SdGuard guard;
 				uploadFile.close();
+				if (uploadTempPath.length() > 0 && SD.exists(uploadTempPath)) {
+					SD.remove(uploadTempPath);
+				}
 			} else {
 				SdGuard guard;
-				uploadFile.write(upload.buf, upload.currentSize);
+				size_t written = uploadFile.write(upload.buf, upload.currentSize);
+				if (written != upload.currentSize) {
+					uploadAborted = true;
+					uploadFile.close();
+					if (uploadTempPath.length() > 0 && SD.exists(uploadTempPath)) {
+						SD.remove(uploadTempPath);
+					}
+				}
 			}
 		}
 	} else if (upload.status == UPLOAD_FILE_END || upload.status == UPLOAD_FILE_ABORTED) {
@@ -334,14 +492,30 @@ inline void handleFileUploadProcess() {
 			uploadFile.close();
 		}
 		if (upload.status == UPLOAD_FILE_END && !uploadAborted) {
-			invalidateTrackCache();
+			SdGuard guard;
+			if (canMutateStoragePathUnderGuard(uploadFinalPath) &&
+				atomicReplaceFile(uploadTempPath, uploadFinalPath)) {
+				refreshSdStatsDirect();
+				invalidateTrackCache();
+			} else {
+				uploadAborted = true;
+				if (SD.exists(uploadTempPath)) {
+					SD.remove(uploadTempPath);
+				}
+			}
+		} else {
+			SdGuard guard;
+			if (uploadTempPath.length() > 0 && SD.exists(uploadTempPath)) {
+				SD.remove(uploadTempPath);
+			}
 		}
 	}
 }
 
 inline void handleFileUploadResponse() {
 	if (uploadAborted) {
-		server.send(413, "application/json", "{\"error\":\"upload failed or exceeded limit\"}");
+		server.send(400, "application/json",
+					"{\"error\":\"upload failed, rejected, or exceeded limit\"}");
 	} else {
 		server.send(200, "application/json", "{\"status\":\"ok\"}");
 	}
@@ -365,6 +539,10 @@ inline void handleApiPlaylistsGet() {
 }
 
 inline void handleApiPlaylistsPost() {
+	if (server.hasArg("plain") && server.arg("plain").length() > MAX_JSON_BODY_SIZE) {
+		server.send(413, "application/json", "{\"error\":\"payload too large\"}");
+		return;
+	}
 	String body = server.arg("plain");
 	String name = extractJsonString(body, "name");
 	if (!isSafePlaylistName(name)) {
@@ -416,6 +594,10 @@ inline void handleApiPlaylistTracksUpdate() {
 		server.send(400, "application/json", "{\"error\":\"missing id\"}");
 		return;
 	}
+	if (server.hasArg("plain") && server.arg("plain").length() > MAX_JSON_BODY_SIZE) {
+		server.send(413, "application/json", "{\"error\":\"payload too large\"}");
+		return;
+	}
 	String id = urldecode(server.arg("id"));
 	if (!isSafePlaylistName(id)) {
 		server.send(400, "application/json", "{\"error\":\"invalid id\"}");
@@ -427,13 +609,17 @@ inline void handleApiPlaylistTracksUpdate() {
 		invalidatePlaylistCache();
 		server.send(200, "application/json", "{\"status\":\"ok\"}");
 	} else {
-		server.send(500, "application/json", "{\"error\":\"write failed\"}");
+		server.send(500, "application/json", "{\"error\":\"write failed or invalid track list\"}");
 	}
 }
 
 inline void handleApiPlaylistTracksAppend() {
 	if (!server.hasArg("id")) {
 		server.send(400, "application/json", "{\"error\":\"missing id\"}");
+		return;
+	}
+	if (server.hasArg("plain") && server.arg("plain").length() > MAX_JSON_BODY_SIZE) {
+		server.send(413, "application/json", "{\"error\":\"payload too large\"}");
 		return;
 	}
 	String id = urldecode(server.arg("id"));
@@ -443,7 +629,7 @@ inline void handleApiPlaylistTracksAppend() {
 	}
 	String body = server.arg("plain");
 	String path = extractJsonString(body, "path");
-	if (!isSafePath(path)) {
+	if (!isSafePath(path) || !isMp3(path)) {
 		server.send(400, "application/json", "{\"error\":\"invalid path\"}");
 		return;
 	}
@@ -451,7 +637,8 @@ inline void handleApiPlaylistTracksAppend() {
 		invalidatePlaylistCache();
 		server.send(200, "application/json", "{\"status\":\"ok\"}");
 	} else {
-		server.send(500, "application/json", "{\"error\":\"append failed\"}");
+		server.send(500, "application/json",
+					"{\"error\":\"append failed, track missing, or playlist full\"}");
 	}
 }
 
@@ -460,25 +647,32 @@ inline void handleApiPlayerToggle() {
 	if (server.hasArg("path")) {
 		path = server.arg("path");
 	} else if (server.hasArg("plain")) {
+		if (server.arg("plain").length() > MAX_JSON_BODY_SIZE) {
+			server.send(413, "application/json", "{\"error\":\"payload too large\"}");
+			return;
+		}
 		path = extractJsonString(server.arg("plain"), "path");
 	}
-	if (path.length() == 0 || !isSafePath(path)) {
+	if (path.length() == 0 || !isSafePath(path) || !isMp3(path)) {
 		server.send(400, "application/json", "{\"error\":\"invalid path\"}");
 		return;
 	}
-	if (togglePlayAudio(path)) {
-		server.send(200, "application/json",
-					"{\"status\":\"ok\",\"state\":\"" + getAudioState() + "\",\"path\":\"" +
-						jsonEscape(getAudioPath()) + "\"}");
+	if (requestAudioToggle(path)) {
+		server.send(200, "application/json", "{\"status\":\"ok\"}");
 	} else {
-		server.send(500, "application/json", "{\"error\":\"playback failed\"}");
+		server.send(500, "application/json", "{\"error\":\"playback request failed\"}");
 	}
 }
 
 inline void handleApiPlayerStatus() {
+	AudioStateSnapshot snap = getAudioSnapshot();
+	String state = "stopped";
+	if (snap.isPlaying) {
+		state = snap.isPaused ? "paused" : "playing";
+	}
 	server.send(200, "application/json",
-				"{\"status\":\"ok\",\"state\":\"" + getAudioState() + "\",\"path\":\"" +
-					jsonEscape(getAudioPath()) + "\"}");
+				"{\"status\":\"ok\",\"state\":\"" + state + "\",\"path\":\"" +
+					jsonEscape(String(snap.path)) + "\"}");
 }
 
 inline void handleDynamicPlaylists() {
@@ -495,6 +689,10 @@ inline void handleDynamicPlaylists() {
 			return;
 		}
 		if (method == HTTP_PUT) {
+			if (server.hasArg("plain") && server.arg("plain").length() > MAX_JSON_BODY_SIZE) {
+				server.send(413, "application/json", "{\"error\":\"payload too large\"}");
+				return;
+			}
 			String body = server.arg("plain");
 			String newName = extractJsonString(body, "newName");
 			if (!isSafePlaylistName(newName)) {
@@ -502,6 +700,7 @@ inline void handleDynamicPlaylists() {
 				return;
 			}
 			if (renamePlaylist(id, newName)) {
+				cascadeRenamePlaylist(id, newName);
 				invalidatePlaylistCache();
 				server.send(200, "application/json", "{\"status\":\"ok\"}");
 			} else {
@@ -511,6 +710,7 @@ inline void handleDynamicPlaylists() {
 		}
 		if (method == HTTP_DELETE) {
 			if (deletePlaylist(id)) {
+				cascadeDeletePlaylist(id);
 				invalidatePlaylistCache();
 				server.send(200, "application/json", "{\"status\":\"ok\"}");
 			} else {
@@ -523,8 +723,6 @@ inline void handleDynamicPlaylists() {
 }
 
 inline void initServer() {
-	initStorage();
-
 	server.on("/", HTTP_GET, handleRoot);
 	server.on("/now", HTTP_GET, handleNow);
 	server.on("/api/mp3", HTTP_GET, handleApiMp3);
@@ -547,9 +745,6 @@ inline void initServer() {
 	server.on("/api/playlists/tracks", HTTP_POST, handleApiPlaylistTracksAppend);
 
 	server.onNotFound(handleDynamicPlaylists);
-
-	server.begin();
-	Serial.println("[HTTP] Server started.");
 }
 
 inline void handleServer() { server.handleClient(); }
