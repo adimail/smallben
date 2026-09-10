@@ -26,17 +26,22 @@ const char DASHBOARD_HTML[] PROGMEM = R"HTML(
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--text);font-family:var(--font-mono);font-size:13px;line-height:1.6;-webkit-font-smoothing:antialiased}
 .wrap{max-width:680px;margin:0 auto;padding:0 20px 80px}
-.top{display:flex;justify-content:space-between;align-items:center;padding:24px 0 20px;border-bottom:1px solid var(--line)}
+.top{display:flex;justify-content:space-between;align-items:center;padding:24px 0 20px;border-bottom:1px solid var(--line);flex-wrap:wrap}
 .brand{font-family:var(--font-serif);font-weight:600;font-size:22px;letter-spacing:-0.01em}
-.status{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);letter-spacing:0.04em}
-.dot{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 0 3px rgba(82,183,136,0.15)}
-
+.status{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);letter-spacing:0.04em;flex-wrap:wrap}
+.sys-info{font-size:11px;color:var(--dim);margin-right:4px}
 .reader-bar{display:flex;align-items:center;gap:14px;padding:16px 20px;background:var(--panel);border:1px solid var(--line);border-radius:3px;margin:20px 0}
 .disc-indicator{width:28px;height:28px;border-radius:50%;border:1px solid var(--line);background:var(--bg);display:flex;align-items:center;justify-content:center;flex-shrink:0}
-.disc-dot{width:6px;height:6px;border-radius:50%;background:var(--amber)}
-.reader-text{min-width:0}
+.disc-dot{width:6px;height:6px;border-radius:50%;background:var(--amber);transition:background .2s}
+.reader-text{min-width:0;flex-grow:1}
 .reader-sub{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em}
 .reader-headline{font-family:var(--font-serif);font-size:15px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.reader-controls{display:flex;align-items:center;gap:6px}
+.btn-reader-action{background:none;border:none;color:var(--text);font-size:13px;cursor:pointer;padding:6px 8px;line-height:1;display:none;align-items:center;justify-content:center;transition:color .15s}
+.btn-reader-action:hover{color:var(--amber)}
+.btn-refresh{background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;padding:4px 6px;transition:color .15s,transform .25s;line-height:1;display:flex;align-items:center;justify-content:center}
+.btn-refresh:hover{color:var(--amber)}
+.btn-refresh.spin{transform:rotate(180deg)}
 
 .nav-tabs{display:flex;border-bottom:1px solid var(--line);margin-bottom:24px;gap:8px}
 .nav-tab{background:none;border:none;color:var(--muted);font-family:var(--font-mono);font-size:13px;padding:10px 16px;cursor:pointer;border-bottom:2px solid transparent;transition:color .15s,border-color .15s}
@@ -119,14 +124,20 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-mono);font-si
 <div class="wrap">
   <div class="top">
     <div class="brand">Smallben</div>
-    <div class="status"><span class="dot"></span><span>online</span></div>
+    <div class="status">
+      <span class="sys-info" id="sysInfo"></span>
+    </div>
   </div>
 
   <div class="reader-bar">
     <div class="disc-indicator"><div class="disc-dot" id="discDot"></div></div>
     <div class="reader-text">
-      <div class="reader-sub">reader status</div>
+      <div class="reader-sub" id="readerSub">reader status</div>
       <div class="reader-headline" id="readerHeadline">Waiting for disc...</div>
+    </div>
+    <div class="reader-controls">
+      <button class="btn-reader-action" id="btnReaderPlay" onclick="toggleCurrentPlay()">&#9654;</button>
+      <button class="btn-refresh" id="btnRefresh" onclick="fetchNow()" title="Refresh Status">&#x21bb;</button>
     </div>
   </div>
 
@@ -259,11 +270,29 @@ const dSize = document.getElementById('dSize');
 const dDownload = document.getElementById('dDownload');
 const dPlayBtn = document.getElementById('dPlayBtn');
 const readerHeadline = document.getElementById('readerHeadline');
+const readerSub = document.getElementById('readerSub');
 const discDot = document.getElementById('discDot');
+const btnRefresh = document.getElementById('btnRefresh');
+const btnReaderPlay = document.getElementById('btnReaderPlay');
+const sysInfo = document.getElementById('sysInfo');
 
-function fmt(b){ return b < 1048576 ? (b/1024).toFixed(1)+' KB' : (b/1048576).toFixed(1)+' MB'; }
+function fmt(b){
+  if(b < 1048576) return (b/1024).toFixed(1) + ' KB';
+  if(b < 1073741824) return (b/1048576).toFixed(1) + ' MB';
+  return (b/1073741824).toFixed(1) + ' GB';
+}
 
 function cleanName(n){ return n.replace(/\.[^/.]+$/, ''); }
+
+function fmtUptime(s){
+  if(s < 60) return s + 's';
+  const m = Math.floor(s / 60);
+  const remS = s % 60;
+  if(m < 60) return m + 'm ' + remS + 's';
+  const h = Math.floor(m / 60);
+  const remM = m % 60;
+  return h + 'h ' + remM + 'm';
+}
 
 function switchView(viewName){
   tabTracks.classList.toggle('active', viewName === 'tracks');
@@ -277,17 +306,70 @@ function switchView(viewName){
   if(viewName === 'tracks' && !tracks.length) loadLibrary();
 }
 
-function updateReaderStatus(){
-  if(playerState === 'playing'){
-    discDot.style.background = 'var(--green)';
-    readerHeadline.textContent = 'Playing: ' + cleanName(playingPath.split('/').pop());
-  } else if(playerState === 'paused'){
-    discDot.style.background = 'var(--amber)';
-    readerHeadline.textContent = 'Paused: ' + cleanName(playingPath.split('/').pop());
-  } else {
-    discDot.style.background = 'var(--amber)';
-    readerHeadline.textContent = 'Waiting for disc...';
-  }
+function fetchNow(){
+  if(btnRefresh) btnRefresh.classList.add('spin');
+  fetch('/now')
+    .then(r => r.json())
+    .then(d => {
+      if(btnRefresh) setTimeout(() => btnRefresh.classList.remove('spin'), 250);
+      playerState = d.player.state;
+      playingPath = d.player.path;
+
+      if(sysInfo){
+        const parts = [];
+        if(d.system && typeof d.system.freeHeap === 'number'){
+          parts.push(fmt(d.system.freeHeap) + ' RAM');
+        }
+        if(d.sd && d.sd.ready && typeof d.sd.totalBytes === 'number' && typeof d.sd.usedBytes === 'number'){
+          const freeBytes = d.sd.totalBytes > d.sd.usedBytes ? (d.sd.totalBytes - d.sd.usedBytes) : 0;
+          parts.push(fmt(freeBytes) + ' SD free');
+        } else if(d.sd && !d.sd.ready){
+          parts.push('No SD');
+        }
+        if(d.system && typeof d.system.uptime === 'number'){
+          parts.push('up ' + fmtUptime(d.system.uptime));
+        }
+        sysInfo.textContent = parts.join(' \u00B7 ');
+      }
+
+      if(!d.sd.ready){
+        discDot.style.background = 'var(--red)';
+        readerHeadline.textContent = 'SD Card Error / Not Detected';
+        readerSub.textContent = 'storage error';
+        btnReaderPlay.style.display = 'none';
+      } else if(playerState === 'playing'){
+        discDot.style.background = 'var(--green)';
+        readerHeadline.textContent = 'Playing: ' + cleanName(d.player.name || playingPath.split('/').pop());
+        readerSub.textContent = 'reader active';
+        btnReaderPlay.style.display = 'flex';
+        btnReaderPlay.innerHTML = '&#10074;&#10074;';
+      } else if(playerState === 'paused'){
+        discDot.style.background = 'var(--amber)';
+        readerHeadline.textContent = 'Paused: ' + cleanName(d.player.name || playingPath.split('/').pop());
+        readerSub.textContent = 'reader paused';
+        btnReaderPlay.style.display = 'flex';
+        btnReaderPlay.innerHTML = '&#9654;';
+      } else {
+        discDot.style.background = 'var(--amber)';
+        readerHeadline.textContent = 'Waiting for disc...';
+        readerSub.textContent = 'reader ready';
+        btnReaderPlay.style.display = 'none';
+      }
+      renderTracksSlice();
+      if(currentPlaylist) renderPlaylistTracks();
+    })
+    .catch(() => {
+      if(btnRefresh) btnRefresh.classList.remove('spin');
+      discDot.style.background = 'var(--red)';
+      readerHeadline.textContent = 'Device Unreachable';
+      readerSub.textContent = 'offline';
+      btnReaderPlay.style.display = 'none';
+    });
+}
+
+function toggleCurrentPlay(){
+  if(!playingPath) return;
+  toggleTrackPlay(playingPath);
 }
 
 function toggleTrackPlay(path){
@@ -295,11 +377,7 @@ function toggleTrackPlay(path){
     .then(r => r.json())
     .then(d => {
       if(d.status === 'ok'){
-        playerState = d.state;
-        playingPath = d.path;
-        updateReaderStatus();
-        renderTracksSlice();
-        if(currentPlaylist) renderPlaylistTracks();
+        fetchNow();
       }
     }).catch(()=>{});
 }
@@ -700,6 +778,7 @@ fileInput.onchange = () => {
   xhr.send(form);
 };
 
+fetchNow();
 loadLibrary();
 loadPlaylists();
 </script>

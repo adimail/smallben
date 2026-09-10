@@ -69,6 +69,36 @@ inline std::vector<String> extractJsonArray(const String &json, const String &ke
 
 inline void handleRoot() { server.send_P(200, "text/html", DASHBOARD_HTML); }
 
+inline void handleNow() {
+	String path = getAudioPath();
+	String name = "";
+	int slash = path.lastIndexOf('/');
+	if (slash != -1) {
+		name = path.substring(slash + 1);
+	} else {
+		name = path;
+	}
+
+	String json = "{";
+	json += "\"player\":{";
+	json += "\"state\":\"" + getAudioState() + "\",";
+	json += "\"path\":\"" + jsonEscape(path) + "\",";
+	json += "\"name\":\"" + jsonEscape(name) + "\"";
+	json += "},";
+	json += "\"sd\":{";
+	json += "\"ready\":" + String(isSdReady() ? "true" : "false") + ",";
+	json += "\"totalBytes\":" + String((unsigned long long)getSdTotalBytes()) + ",";
+	json += "\"usedBytes\":" + String((unsigned long long)getSdUsedBytes());
+	json += "},";
+	json += "\"system\":{";
+	json += "\"freeHeap\":" + String(ESP.getFreeHeap()) + ",";
+	json += "\"uptime\":" + String(millis() / 1000);
+	json += "}";
+	json += "}";
+
+	server.send(200, "application/json", json);
+}
+
 inline void handleApiMp3() {
 	rebuildTrackCacheIfNeeded();
 	server.setContentLength(CONTENT_LENGTH_UNKNOWN);
@@ -442,6 +472,7 @@ inline void initServer() {
 	initStorage();
 
 	server.on("/", HTTP_GET, handleRoot);
+	server.on("/now", HTTP_GET, handleNow);
 	server.on("/api/mp3", HTTP_GET, handleApiMp3);
 	server.on("/api/track/playlists", HTTP_GET, handleApiTrackPlaylists);
 	server.on("/api/tree", HTTP_GET, handleApiTree);

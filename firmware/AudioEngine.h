@@ -44,6 +44,9 @@ inline void stopAudio() {
 		delete audioFile;
 		audioFile = nullptr;
 	}
+	if (audioOut) {
+		audioOut->stop();
+	}
 	audioIsPlaying = false;
 	audioIsPaused = false;
 	audioCurrentPath = "";
@@ -90,7 +93,6 @@ inline bool togglePlayAudio(const String &path) {
 	AudioGuard guard;
 	if (audioIsPlaying && audioCurrentPath == path) {
 		audioIsPaused = !audioIsPaused;
-
 		if (audioIsPaused) {
 			if (audioOut) {
 				audioOut->stop();

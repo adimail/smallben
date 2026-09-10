@@ -9,6 +9,7 @@
 #include <vector>
 
 static SemaphoreHandle_t sdMutex = nullptr;
+static bool g_sdReady = false;
 
 class SdGuard {
   public:
@@ -78,13 +79,30 @@ inline bool initStorage() {
 	}
 	pinMode(SD_CS_PIN, OUTPUT);
 	digitalWrite(SD_CS_PIN, HIGH);
-	if (!SD.begin(SD_CS_PIN)) {
+	g_sdReady = SD.begin(SD_CS_PIN);
+	if (!g_sdReady) {
 		return false;
 	}
 	if (!SD.exists("/playlists")) {
 		SD.mkdir("/playlists");
 	}
 	return true;
+}
+
+inline bool isSdReady() { return g_sdReady; }
+
+inline uint64_t getSdTotalBytes() {
+	if (!g_sdReady)
+		return 0;
+	SdGuard guard;
+	return SD.totalBytes();
+}
+
+inline uint64_t getSdUsedBytes() {
+	if (!g_sdReady)
+		return 0;
+	SdGuard guard;
+	return SD.usedBytes();
 }
 
 inline bool isJunk(String name) {
