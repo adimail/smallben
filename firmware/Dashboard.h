@@ -108,6 +108,9 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-mono);font-si
 .drawer-meta-val{font-size:12px;color:var(--text);word-break:break-all}
 .drawer-tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
 .drawer-tag{background:var(--bg);border:1px solid var(--line);color:var(--amber);padding:3px 8px;border-radius:2px;font-size:11px}
+.drawer-btn-group{display:flex;flex-direction:column;gap:10px}
+.btn-play{display:block;width:100%;text-align:center;padding:12px;background:var(--green);color:#121110;border:none;cursor:pointer;font-family:inherit;font-weight:bold;font-size:12px;border-radius:2px;transition:opacity .15s}
+.btn-play:hover{opacity:0.9}
 .btn-download{display:block;width:100%;text-align:center;padding:12px;background:var(--amber);color:#121110;text-decoration:none;font-weight:bold;font-size:12px;border-radius:2px;transition:opacity .15s}
 .btn-download:hover{opacity:0.9}
 </style>
@@ -120,10 +123,10 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-mono);font-si
   </div>
 
   <div class="reader-bar">
-    <div class="disc-indicator"><div class="disc-dot"></div></div>
+    <div class="disc-indicator"><div class="disc-dot" id="discDot"></div></div>
     <div class="reader-text">
       <div class="reader-sub">reader status</div>
-      <div class="reader-headline">Waiting for disc...</div>
+      <div class="reader-headline" id="readerHeadline">Waiting for disc...</div>
     </div>
   </div>
 
@@ -202,7 +205,10 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-mono);font-si
       <span class="drawer-meta-val" id="dSize"></span>
     </div>
   </div>
-  <a class="btn-download" id="dDownload" href="#" download>Download Track</a>
+  <div class="drawer-btn-group">
+    <button class="btn-play" id="dPlayBtn">Play Track</button>
+    <a class="btn-download" id="dDownload" href="#" download>Download Track</a>
+  </div>
 </div>
 
 <script>
@@ -211,6 +217,8 @@ let playlists = [];
 let showAllTracks = false;
 let currentPlaylist = null;
 let currentPlaylistTracks = [];
+let playingPath = '';
+let playerState = 'stopped';
 
 const tabTracks = document.getElementById('tabTracks');
 const tabPlaylists = document.getElementById('tabPlaylists');
@@ -249,6 +257,9 @@ const dPlaylists = document.getElementById('dPlaylists');
 const dPath = document.getElementById('dPath');
 const dSize = document.getElementById('dSize');
 const dDownload = document.getElementById('dDownload');
+const dPlayBtn = document.getElementById('dPlayBtn');
+const readerHeadline = document.getElementById('readerHeadline');
+const discDot = document.getElementById('discDot');
 
 function fmt(b){ return b < 1048576 ? (b/1024).toFixed(1)+' KB' : (b/1048576).toFixed(1)+' MB'; }
 
@@ -266,6 +277,33 @@ function switchView(viewName){
   if(viewName === 'tracks' && !tracks.length) loadLibrary();
 }
 
+function updateReaderStatus(){
+  if(playerState === 'playing'){
+    discDot.style.background = 'var(--green)';
+    readerHeadline.textContent = 'Playing: ' + cleanName(playingPath.split('/').pop());
+  } else if(playerState === 'paused'){
+    discDot.style.background = 'var(--amber)';
+    readerHeadline.textContent = 'Paused: ' + cleanName(playingPath.split('/').pop());
+  } else {
+    discDot.style.background = 'var(--amber)';
+    readerHeadline.textContent = 'Waiting for disc...';
+  }
+}
+
+function toggleTrackPlay(path){
+  fetch('/api/player/toggle?path=' + encodeURIComponent(path), { method: 'POST' })
+    .then(r => r.json())
+    .then(d => {
+      if(d.status === 'ok'){
+        playerState = d.state;
+        playingPath = d.path;
+        updateReaderStatus();
+        renderTracksSlice();
+        if(currentPlaylist) renderPlaylistTracks();
+      }
+    }).catch(()=>{});
+}
+
 function renderTracksSlice(){
   if(!tracks.length){
     trackList.innerHTML = '<div class="msg">No tracks found on storage.</div>';
@@ -273,19 +311,24 @@ function renderTracksSlice(){
     return;
   }
   const visible = showAllTracks ? tracks : tracks.slice(0, 5);
-  trackList.innerHTML = visible.map((t, i) => `
-    <div class="track-row" onclick="openDrawer(${i})">
-      <span class="num">${String(i+1).padStart(2,'0')}</span>
-      <div class="track-main">
-        <div class="track-title">${cleanName(t.name)}</div>
-        <div class="track-sub">${t.path}</div>
+  trackList.innerHTML = visible.map((t, i) => {
+    const isThisPlaying = (playingPath === t.path && playerState === 'playing');
+    const playIcon = isThisPlaying ? '&#10074;&#10074;' : '&#9654;';
+    return `
+      <div class="track-row" onclick="openDrawer(${i})">
+        <span class="num">${String(i+1).padStart(2,'0')}</span>
+        <div class="track-main">
+          <div class="track-title">${cleanName(t.name)}</div>
+          <div class="track-sub">${t.path}</div>
+        </div>
+        <span class="track-size">${fmt(t.size)}</span>
+        <div class="track-actions">
+          <button class="btn-icon" onclick="event.stopPropagation();toggleTrackPlay('${t.path.replace(/'/g,"\\'")}')">${playIcon}</button>
+          <button class="btn-icon" onclick="event.stopPropagation();addToPlaylistPrompt('${t.path.replace(/'/g,"\\'")}')">+ list</button>
+        </div>
       </div>
-      <span class="track-size">${fmt(t.size)}</span>
-      <div class="track-actions">
-        <button class="btn-icon" onclick="event.stopPropagation();addToPlaylistPrompt('${t.path.replace(/'/g,"\\'")}')">+ list</button>
-      </div>
-    </div>
-  `).join('');
+    `;
+  }).join('');
 
   if(tracks.length > 5){
     btnLoadMore.style.display = 'block';
@@ -314,6 +357,10 @@ async function openDrawer(idx){
   dPlaylists.textContent = 'Scanning playlists...';
   dDownload.href = '/api/download?path=' + encodeURIComponent(t.path);
   dDownload.setAttribute('download', t.name);
+
+  dPlayBtn.onclick = () => {
+    toggleTrackPlay(t.path);
+  };
 
   drawerOverlay.classList.add('open');
   trackDrawer.classList.add('open');
@@ -398,21 +445,26 @@ function renderPlaylistTracks(){
     detailTrackList.innerHTML = '<div class="msg">This playlist is empty.</div>';
     return;
   }
-  detailTrackList.innerHTML = currentPlaylistTracks.map((t, i) => `
-    <div class="track-row">
-      <span class="num">${String(i+1).padStart(2,'0')}</span>
-      <div class="track-main">
-        <div class="track-title">${cleanName(t.name)}</div>
-        <div class="track-sub">${t.path}</div>
+  detailTrackList.innerHTML = currentPlaylistTracks.map((t, i) => {
+    const isThisPlaying = (playingPath === t.path && playerState === 'playing');
+    const playIcon = isThisPlaying ? '&#10074;&#10074;' : '&#9654;';
+    return `
+      <div class="track-row">
+        <span class="num">${String(i+1).padStart(2,'0')}</span>
+        <div class="track-main">
+          <div class="track-title">${cleanName(t.name)}</div>
+          <div class="track-sub">${t.path}</div>
+        </div>
+        <span class="track-size">${fmt(t.size)}</span>
+        <div class="track-actions">
+          <button class="btn-icon" onclick="toggleTrackPlay('${t.path.replace(/'/g,"\\'")}')">${playIcon}</button>
+          <button class="btn-icon" onclick="moveTrack(${i}, -1)">&#9650;</button>
+          <button class="btn-icon" onclick="moveTrack(${i}, 1)">&#9660;</button>
+          <button class="btn-icon btn-del" onclick="removeTrack(${i})">&#10005;</button>
+        </div>
       </div>
-      <span class="track-size">${fmt(t.size)}</span>
-      <div class="track-actions">
-        <button class="btn-icon" onclick="moveTrack(${i}, -1)">&#9650;</button>
-        <button class="btn-icon" onclick="moveTrack(${i}, 1)">&#9660;</button>
-        <button class="btn-icon btn-del" onclick="removeTrack(${i})">&#10005;</button>
-      </div>
-    </div>
-  `).join('');
+    `;
+  }).join('');
 }
 
 function savePlaylistOrder(){

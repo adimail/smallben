@@ -1,4 +1,5 @@
 #pragma once
+#include "AudioEngine.h"
 #include "Config.h"
 #include "Dashboard.h"
 #include "Storage.h"
@@ -326,6 +327,32 @@ inline void handleApiPlaylistTracksAppend() {
 	}
 }
 
+inline void handleApiPlayerToggle() {
+	String path = "";
+	if (server.hasArg("path")) {
+		path = server.arg("path");
+	} else if (server.hasArg("plain")) {
+		path = extractJsonString(server.arg("plain"), "path");
+	}
+	if (path.length() == 0 || !isSafePath(path)) {
+		server.send(400, "application/json", "{\"error\":\"invalid path\"}");
+		return;
+	}
+	if (togglePlayAudio(path)) {
+		server.send(200, "application/json",
+					"{\"status\":\"ok\",\"state\":\"" + getAudioState() + "\",\"path\":\"" +
+						jsonEscape(getAudioPath()) + "\"}");
+	} else {
+		server.send(500, "application/json", "{\"error\":\"playback failed\"}");
+	}
+}
+
+inline void handleApiPlayerStatus() {
+	server.send(200, "application/json",
+				"{\"status\":\"ok\",\"state\":\"" + getAudioState() + "\",\"path\":\"" +
+					jsonEscape(getAudioPath()) + "\"}");
+}
+
 inline void handleDynamicPlaylists() {
 	String uri = server.uri();
 	HTTPMethod method = server.method();
@@ -374,6 +401,9 @@ inline void initServer() {
 	server.on("/api/delete", HTTP_DELETE, handleApiDelete);
 	server.on("/api/download", HTTP_GET, handleApiDownload);
 	server.on("/api/upload", HTTP_POST, handleFileUploadResponse, handleFileUploadProcess);
+
+	server.on("/api/player/toggle", HTTP_POST, handleApiPlayerToggle);
+	server.on("/api/player/status", HTTP_GET, handleApiPlayerStatus);
 
 	server.on("/api/playlists", HTTP_GET, handleApiPlaylistsGet);
 	server.on("/api/playlists", HTTP_POST, handleApiPlaylistsPost);

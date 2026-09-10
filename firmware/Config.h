@@ -2,6 +2,9 @@
 #include <Arduino.h>
 
 #define SD_CS_PIN 5
+#define I2S_BCLK_PIN 27
+#define I2S_LRC_PIN 26
+#define I2S_DIN_PIN 25
 
 const char *AP_SSID = "Smallben-Setup";
 const char *AP_PASS = "smallben123";
