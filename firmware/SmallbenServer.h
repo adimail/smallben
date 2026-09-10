@@ -70,20 +70,45 @@ inline std::vector<String> extractJsonArray(const String &json, const String &ke
 inline void handleRoot() { server.send_P(200, "text/html", DASHBOARD_HTML); }
 
 inline void handleApiMp3() {
+	rebuildTrackCacheIfNeeded();
 	server.setContentLength(CONTENT_LENGTH_UNKNOWN);
 	server.send(200, "application/json", "");
-	File root = SD.open("/");
-	bool first = true;
 	server.sendContent("[");
-	if (root) {
-		iterateMp3Tracks(root, "/", [&](const String &name, const String &path, size_t sz) {
+	bool first = true;
+	for (const auto &t : g_trackCache) {
+		if (!first)
+			server.sendContent(",");
+		first = false;
+		server.sendContent("{\"name\":\"" + jsonEscape(t.name) + "\",\"path\":\"" +
+						   jsonEscape(t.path) + "\",\"size\":" + String(t.size) + "}");
+	}
+	server.sendContent("]");
+	server.sendContent("");
+}
+
+inline void handleApiTrackPlaylists() {
+	if (!server.hasArg("path")) {
+		server.send(400, "application/json", "{\"error\":\"missing path\"}");
+		return;
+	}
+	String path = server.arg("path");
+	if (!isSafePath(path)) {
+		server.send(400, "application/json", "{\"error\":\"invalid path\"}");
+		return;
+	}
+	rebuildPlaylistCacheIfNeeded();
+	server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+	server.send(200, "application/json", "");
+	server.sendContent("[");
+	bool first = true;
+	auto it = g_trackPlaylistIndex.find(path);
+	if (it != g_trackPlaylistIndex.end()) {
+		for (const String &name : it->second) {
 			if (!first)
 				server.sendContent(",");
 			first = false;
-			server.sendContent("{\"name\":\"" + jsonEscape(name) + "\",\"path\":\"" +
-							   jsonEscape(path) + "\",\"size\":" + String(sz) + "}");
-		});
-		root.close();
+			server.sendContent("\"" + jsonEscape(name) + "\"");
+		}
 	}
 	server.sendContent("]");
 	server.sendContent("");
@@ -97,6 +122,7 @@ inline void handleApiTree() {
 		server.send(400, "application/json", "{\"error\":\"invalid path\"}");
 		return;
 	}
+	SdGuard guard;
 	File dir = SD.open(path);
 	if (!dir || !dir.isDirectory()) {
 		if (dir)
@@ -135,6 +161,8 @@ inline void handleApiDelete() {
 		return;
 	}
 	if (deleteStoragePath(path)) {
+		invalidateTrackCache();
+		invalidatePlaylistCache();
 		server.send(200, "application/json", "{\"status\":\"ok\"}");
 	} else {
 		server.send(500, "application/json", "{\"error\":\"delete failed\"}");
@@ -147,7 +175,12 @@ inline void handleApiDownload() {
 		return;
 	}
 	String path = server.arg("path");
-	if (!isSafePath(path) || !SD.exists(path)) {
+	if (!isSafePath(path)) {
+		server.send(404, "text/plain", "File not found");
+		return;
+	}
+	SdGuard guard;
+	if (!SD.exists(path)) {
 		server.send(404, "text/plain", "File not found");
 		return;
 	}
@@ -191,6 +224,7 @@ inline void handleFileUploadProcess() {
 			uploadAborted = true;
 			return;
 		}
+		SdGuard guard;
 		if (SD.exists(fullPath)) {
 			SD.remove(fullPath);
 		}
@@ -203,14 +237,20 @@ inline void handleFileUploadProcess() {
 			uploadBytesWritten += upload.currentSize;
 			if (uploadBytesWritten > MAX_UPLOAD_SIZE) {
 				uploadAborted = true;
+				SdGuard guard;
 				uploadFile.close();
 			} else {
+				SdGuard guard;
 				uploadFile.write(upload.buf, upload.currentSize);
 			}
 		}
 	} else if (upload.status == UPLOAD_FILE_END || upload.status == UPLOAD_FILE_ABORTED) {
 		if (uploadFile) {
+			SdGuard guard;
 			uploadFile.close();
+		}
+		if (upload.status == UPLOAD_FILE_END && !uploadAborted) {
+			invalidateTrackCache();
 		}
 	}
 }
@@ -224,17 +264,18 @@ inline void handleFileUploadResponse() {
 }
 
 inline void handleApiPlaylistsGet() {
+	rebuildPlaylistCacheIfNeeded();
 	server.setContentLength(CONTENT_LENGTH_UNKNOWN);
 	server.send(200, "application/json", "");
 	server.sendContent("[");
 	bool first = true;
-	iteratePlaylists([&](const String &name, int count) {
+	for (const auto &p : g_playlistCache) {
 		if (!first)
 			server.sendContent(",");
 		first = false;
-		server.sendContent("{\"name\":\"" + jsonEscape(name) +
-						   "\",\"trackCount\":" + String(count) + "}");
-	});
+		server.sendContent("{\"name\":\"" + jsonEscape(p.name) +
+						   "\",\"trackCount\":" + String(p.trackCount) + "}");
+	}
 	server.sendContent("]");
 	server.sendContent("");
 }
@@ -247,6 +288,7 @@ inline void handleApiPlaylistsPost() {
 		return;
 	}
 	if (createPlaylist(name)) {
+		invalidatePlaylistCache();
 		server.send(200, "application/json", "{\"status\":\"ok\"}");
 	} else {
 		server.send(409, "application/json", "{\"error\":\"already exists or write failed\"}");
@@ -298,6 +340,7 @@ inline void handleApiPlaylistTracksUpdate() {
 	String body = server.arg("plain");
 	std::vector<String> tracks = extractJsonArray(body, "tracks");
 	if (overwritePlaylistTracks(id, tracks)) {
+		invalidatePlaylistCache();
 		server.send(200, "application/json", "{\"status\":\"ok\"}");
 	} else {
 		server.send(500, "application/json", "{\"error\":\"write failed\"}");
@@ -321,6 +364,7 @@ inline void handleApiPlaylistTracksAppend() {
 		return;
 	}
 	if (appendPlaylistTrack(id, path)) {
+		invalidatePlaylistCache();
 		server.send(200, "application/json", "{\"status\":\"ok\"}");
 	} else {
 		server.send(500, "application/json", "{\"error\":\"append failed\"}");
@@ -374,6 +418,7 @@ inline void handleDynamicPlaylists() {
 				return;
 			}
 			if (renamePlaylist(id, newName)) {
+				invalidatePlaylistCache();
 				server.send(200, "application/json", "{\"status\":\"ok\"}");
 			} else {
 				server.send(500, "application/json", "{\"error\":\"rename failed\"}");
@@ -382,6 +427,7 @@ inline void handleDynamicPlaylists() {
 		}
 		if (method == HTTP_DELETE) {
 			if (deletePlaylist(id)) {
+				invalidatePlaylistCache();
 				server.send(200, "application/json", "{\"status\":\"ok\"}");
 			} else {
 				server.send(500, "application/json", "{\"error\":\"delete failed\"}");
@@ -397,6 +443,7 @@ inline void initServer() {
 
 	server.on("/", HTTP_GET, handleRoot);
 	server.on("/api/mp3", HTTP_GET, handleApiMp3);
+	server.on("/api/track/playlists", HTTP_GET, handleApiTrackPlaylists);
 	server.on("/api/tree", HTTP_GET, handleApiTree);
 	server.on("/api/delete", HTTP_DELETE, handleApiDelete);
 	server.on("/api/download", HTTP_GET, handleApiDownload);

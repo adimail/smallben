@@ -15,9 +15,10 @@ void setup() {
 
   initAudio();
   initServer();
+  startAudioTask();
 }
 
 void loop() {
-  handleAudio();
   handleServer();
 }
+

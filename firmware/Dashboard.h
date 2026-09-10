@@ -366,22 +366,8 @@ async function openDrawer(idx){
   trackDrawer.classList.add('open');
 
   try{
-    const res = await fetch('/api/playlists');
-    const plists = await res.json();
-    playlists = plists;
-    let matchNames = [];
-    const checks = plists.map(p => {
-      const base = p.name.replace('.m3u','');
-      return fetch('/api/playlists/' + encodeURIComponent(base) + '/tracks')
-        .then(r => r.json())
-        .then(trks => {
-          if(trks.some(tk => tk.path === t.path)) {
-            matchNames.push(base);
-          }
-        })
-        .catch(()=>{});
-    });
-    await Promise.all(checks);
+    const res = await fetch('/api/track/playlists?path=' + encodeURIComponent(t.path));
+    const matchNames = await res.json();
     if(matchNames.length === 0){
       dPlaylists.innerHTML = '<span>Part of 0 playlists</span>';
     } else {

@@ -21,3 +21,8 @@ const size_t NUM_HIDDEN_EXTENSIONS = sizeof(HIDDEN_EXTENSIONS) / sizeof(HIDDEN_E
 
 const char *const HIDDEN_PREFIXES[] = {".", "._"};
 const size_t NUM_HIDDEN_PREFIXES = sizeof(HIDDEN_PREFIXES) / sizeof(HIDDEN_PREFIXES[0]);
+
+const uint32_t AUDIO_TASK_STACK_SIZE = 8192;
+const UBaseType_t AUDIO_TASK_PRIORITY = 3;
+const BaseType_t AUDIO_TASK_CORE = 0;
+const TickType_t AUDIO_TASK_DELAY_TICKS = 1;

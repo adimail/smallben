@@ -3,6 +3,43 @@
 #include <Arduino.h>
 #include <SD.h>
 #include <SPI.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#include <map>
+#include <vector>
+
+static SemaphoreHandle_t sdMutex = nullptr;
+
+class SdGuard {
+  public:
+	SdGuard() { xSemaphoreTakeRecursive(sdMutex, portMAX_DELAY); }
+	~SdGuard() { xSemaphoreGiveRecursive(sdMutex); }
+	SdGuard(const SdGuard &) = delete;
+	SdGuard &operator=(const SdGuard &) = delete;
+};
+
+struct TrackInfo {
+	String name;
+	String path;
+	size_t size;
+};
+
+struct PlaylistInfo {
+	String name;
+	int trackCount;
+};
+
+static std::vector<TrackInfo> g_trackCache;
+static bool g_trackCacheValid = false;
+
+static std::vector<PlaylistInfo> g_playlistCache;
+static bool g_playlistCacheValid = false;
+
+static std::map<String, std::vector<String>> g_trackPlaylistIndex;
+
+inline void invalidateTrackCache() { g_trackCacheValid = false; }
+
+inline void invalidatePlaylistCache() { g_playlistCacheValid = false; }
 
 inline String urldecode(const String &src) {
 	String decoded = "";
@@ -36,6 +73,9 @@ inline String urldecode(const String &src) {
 }
 
 inline bool initStorage() {
+	if (!sdMutex) {
+		sdMutex = xSemaphoreCreateRecursiveMutex();
+	}
 	pinMode(SD_CS_PIN, OUTPUT);
 	digitalWrite(SD_CS_PIN, HIGH);
 	if (!SD.begin(SD_CS_PIN)) {
@@ -137,6 +177,7 @@ inline String getPlaylistPath(String name) {
 }
 
 inline bool deleteStoragePath(const String &path) {
+	SdGuard guard;
 	if (isProtectedStoragePath(path)) {
 		return false;
 	}
@@ -206,7 +247,83 @@ template <typename Callback> inline void iterateDirectory(File dir, Callback cb)
 	}
 }
 
+inline void rebuildTrackCacheIfNeeded() {
+	if (g_trackCacheValid)
+		return;
+	std::vector<TrackInfo> fresh;
+	{
+		SdGuard guard;
+		File root = SD.open("/");
+		if (root) {
+			iterateMp3Tracks(root, "/", [&](const String &name, const String &path, size_t sz) {
+				fresh.push_back({name, path, sz});
+			});
+			root.close();
+		}
+	}
+	g_trackCache = fresh;
+	g_trackCacheValid = true;
+}
+
+inline bool getCachedTrackSize(const String &path, size_t &sizeOut) {
+	rebuildTrackCacheIfNeeded();
+	for (const auto &t : g_trackCache) {
+		if (t.path == path) {
+			sizeOut = t.size;
+			return true;
+		}
+	}
+	return false;
+}
+
+inline void rebuildPlaylistCacheIfNeeded() {
+	if (g_playlistCacheValid)
+		return;
+	std::vector<PlaylistInfo> freshPlaylists;
+	std::map<String, std::vector<String>> freshIndex;
+	{
+		SdGuard guard;
+		File dir = SD.open("/playlists");
+		if (dir) {
+			while (true) {
+				File entry = dir.openNextFile();
+				if (!entry)
+					break;
+				String name = entry.name();
+				String lower = name;
+				lower.toLowerCase();
+				if (!entry.isDirectory() && lower.endsWith(".m3u") && !name.startsWith(".") &&
+					!name.startsWith("._")) {
+					String fullPath = "/playlists/" + name;
+					String base = name;
+					base.replace(".m3u", "");
+					int count = 0;
+					File f = SD.open(fullPath, FILE_READ);
+					if (f) {
+						while (f.available()) {
+							String line = f.readStringUntil('\n');
+							line.trim();
+							if (line.length() > 0 && !line.startsWith("#")) {
+								count++;
+								freshIndex[line].push_back(base);
+							}
+						}
+						f.close();
+					}
+					freshPlaylists.push_back({name, count});
+				}
+				entry.close();
+			}
+			dir.close();
+		}
+	}
+	g_playlistCache = freshPlaylists;
+	g_trackPlaylistIndex = freshIndex;
+	g_playlistCacheValid = true;
+}
+
 inline int countPlaylistTracks(const String &path) {
+	SdGuard guard;
 	File f = SD.open(path, FILE_READ);
 	if (!f)
 		return 0;
@@ -223,6 +340,7 @@ inline int countPlaylistTracks(const String &path) {
 }
 
 template <typename Callback> inline void iteratePlaylists(Callback cb) {
+	SdGuard guard;
 	File dir = SD.open("/playlists");
 	if (!dir)
 		return;
@@ -246,32 +364,33 @@ template <typename Callback> inline void iteratePlaylists(Callback cb) {
 
 template <typename Callback> inline bool iteratePlaylistTracks(const String &name, Callback cb) {
 	String path = getPlaylistPath(name);
-	File f = SD.open(path, FILE_READ);
-	if (!f)
-		return false;
-	while (f.available()) {
-		String trackPath = f.readStringUntil('\n');
-		trackPath.trim();
-		if (trackPath.length() > 0 && !trackPath.startsWith("#")) {
-			int lastSlash = trackPath.lastIndexOf('/');
-			String trackName = (lastSlash != -1) ? trackPath.substring(lastSlash + 1) : trackPath;
-			size_t sz = 0;
-			bool exists = SD.exists(trackPath);
-			if (exists) {
-				File tf = SD.open(trackPath, FILE_READ);
-				if (tf) {
-					sz = tf.size();
-					tf.close();
-				}
+	std::vector<String> lines;
+	{
+		SdGuard guard;
+		File f = SD.open(path, FILE_READ);
+		if (!f)
+			return false;
+		while (f.available()) {
+			String trackPath = f.readStringUntil('\n');
+			trackPath.trim();
+			if (trackPath.length() > 0 && !trackPath.startsWith("#")) {
+				lines.push_back(trackPath);
 			}
-			cb(trackName, trackPath, sz, exists);
 		}
+		f.close();
 	}
-	f.close();
+	for (const String &trackPath : lines) {
+		int lastSlash = trackPath.lastIndexOf('/');
+		String trackName = (lastSlash != -1) ? trackPath.substring(lastSlash + 1) : trackPath;
+		size_t sz = 0;
+		bool exists = getCachedTrackSize(trackPath, sz);
+		cb(trackName, trackPath, sz, exists);
+	}
 	return true;
 }
 
 inline bool createPlaylist(const String &name) {
+	SdGuard guard;
 	String path = getPlaylistPath(name);
 	if (SD.exists(path))
 		return false;
@@ -283,6 +402,7 @@ inline bool createPlaylist(const String &name) {
 }
 
 inline bool renamePlaylist(const String &oldName, const String &newName) {
+	SdGuard guard;
 	String oldPath = getPlaylistPath(oldName);
 	String newPath = getPlaylistPath(newName);
 	if (!SD.exists(oldPath) || SD.exists(newPath))
@@ -309,6 +429,7 @@ inline bool renamePlaylist(const String &oldName, const String &newName) {
 }
 
 inline bool deletePlaylist(const String &name) {
+	SdGuard guard;
 	String path = getPlaylistPath(name);
 	if (!SD.exists(path))
 		return false;
@@ -316,6 +437,7 @@ inline bool deletePlaylist(const String &name) {
 }
 
 inline bool appendPlaylistTrack(const String &name, const String &trackPath) {
+	SdGuard guard;
 	String path = getPlaylistPath(name);
 	if (!SD.exists(path) || !isSafePath(trackPath))
 		return false;
@@ -328,6 +450,7 @@ inline bool appendPlaylistTrack(const String &name, const String &trackPath) {
 }
 
 inline bool overwritePlaylistTracks(const String &name, const std::vector<String> &tracks) {
+	SdGuard guard;
 	String path = getPlaylistPath(name);
 	if (!SD.exists(path))
 		return false;
