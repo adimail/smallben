@@ -2,9 +2,19 @@
 #include <Arduino.h>
 
 #define SD_CS_PIN 5
+#define SD_SCK_PIN 18
+#define SD_MISO_PIN 19
+#define SD_MOSI_PIN 23
+
 #define I2S_BCLK_PIN 27
 #define I2S_LRC_PIN 26
 #define I2S_DIN_PIN 25
+
+#define RFID_SS_PIN 21
+#define RFID_RST_PIN 22
+#define RFID_SCK_PIN 14
+#define RFID_MISO_PIN 4
+#define RFID_MOSI_PIN 13
 
 const char *AP_SSID = "Smallben-Setup";
 const char *AP_PASS = "smallben123";
@@ -13,7 +23,7 @@ const uint16_t HTTP_PORT = 80;
 const size_t MAX_UPLOAD_SIZE = 31457280;
 
 const char *const HIDDEN_EXACT_NAMES[] = {"playlists", "system volume information", "thumbs.db",
-										  ".ds_store"};
+										  ".ds_store", "discs.csv"};
 const size_t NUM_HIDDEN_EXACT_NAMES = sizeof(HIDDEN_EXACT_NAMES) / sizeof(HIDDEN_EXACT_NAMES[0]);
 
 const char *const HIDDEN_EXTENSIONS[] = {".m3u", ".db", ".dat", ".idx", ".bin", ".sys"};

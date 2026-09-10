@@ -8,12 +8,22 @@
 #include <map>
 #include <vector>
 
+static SPIClass sdSPI(HSPI);
 static SemaphoreHandle_t sdMutex = nullptr;
 static bool g_sdReady = false;
 
+inline void ensureSdMutex() {
+	if (!sdMutex) {
+		sdMutex = xSemaphoreCreateRecursiveMutex();
+	}
+}
+
 class SdGuard {
   public:
-	SdGuard() { xSemaphoreTakeRecursive(sdMutex, portMAX_DELAY); }
+	SdGuard() {
+		ensureSdMutex();
+		xSemaphoreTakeRecursive(sdMutex, portMAX_DELAY);
+	}
 	~SdGuard() { xSemaphoreGiveRecursive(sdMutex); }
 	SdGuard(const SdGuard &) = delete;
 	SdGuard &operator=(const SdGuard &) = delete;
@@ -74,12 +84,11 @@ inline String urldecode(const String &src) {
 }
 
 inline bool initStorage() {
-	if (!sdMutex) {
-		sdMutex = xSemaphoreCreateRecursiveMutex();
-	}
+	ensureSdMutex();
 	pinMode(SD_CS_PIN, OUTPUT);
 	digitalWrite(SD_CS_PIN, HIGH);
-	g_sdReady = SD.begin(SD_CS_PIN);
+	sdSPI.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
+	g_sdReady = SD.begin(SD_CS_PIN, sdSPI);
 	if (!g_sdReady) {
 		return false;
 	}
@@ -405,6 +414,24 @@ template <typename Callback> inline bool iteratePlaylistTracks(const String &nam
 		cb(trackName, trackPath, sz, exists);
 	}
 	return true;
+}
+
+inline String getPlaylistFirstTrack(const String &name) {
+	String path = getPlaylistPath(name);
+	SdGuard guard;
+	File f = SD.open(path, FILE_READ);
+	if (!f)
+		return "";
+	while (f.available()) {
+		String line = f.readStringUntil('\n');
+		line.trim();
+		if (line.length() > 0 && !line.startsWith("#")) {
+			f.close();
+			return line;
+		}
+	}
+	f.close();
+	return "";
 }
 
 inline bool createPlaylist(const String &name) {

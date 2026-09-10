@@ -2,6 +2,7 @@
 #include "AudioEngine.h"
 #include "Config.h"
 #include "Dashboard.h"
+#include "RfidEngine.h"
 #include "Storage.h"
 #include <Arduino.h>
 #include <WebServer.h>
@@ -90,6 +91,14 @@ inline void handleNow() {
 	json += "\"totalBytes\":" + String((unsigned long long)getSdTotalBytes()) + ",";
 	json += "\"usedBytes\":" + String((unsigned long long)getSdUsedBytes());
 	json += "},";
+	json += "\"rfid\":{";
+	json += "\"present\":" + String(isRfidPresent() ? "true" : "false") + ",";
+	json += "\"uid\":\"" + jsonEscape(getRfidUid()) + "\",";
+	json += "\"mapped\":" + String(isRfidMapped() ? "true" : "false") + ",";
+	json += "\"type\":\"" + jsonEscape(getRfidType()) + "\",";
+	json += "\"target\":\"" + jsonEscape(getRfidTarget()) + "\",";
+	json += "\"label\":\"" + jsonEscape(getRfidLabel()) + "\"";
+	json += "},";
 	json += "\"system\":{";
 	json += "\"freeHeap\":" + String(ESP.getFreeHeap()) + ",";
 	json += "\"uptime\":" + String(millis() / 1000);
@@ -97,6 +106,51 @@ inline void handleNow() {
 	json += "}";
 
 	server.send(200, "application/json", json);
+}
+
+inline void handleApiDiscsGet() {
+	server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+	server.send(200, "application/json", "");
+	server.sendContent("[");
+	bool first = true;
+	for (const auto &pair : g_discMappings) {
+		if (!first)
+			server.sendContent(",");
+		first = false;
+		server.sendContent("{\"uid\":\"" + jsonEscape(pair.second.uid) + "\",\"type\":\"" +
+						   jsonEscape(pair.second.type) + "\",\"target\":\"" +
+						   jsonEscape(pair.second.target) + "\",\"label\":\"" +
+						   jsonEscape(pair.second.label) + "\"}");
+	}
+	server.sendContent("]");
+	server.sendContent("");
+}
+
+inline void handleApiDiscsMap() {
+	String body = server.arg("plain");
+	String uid = extractJsonString(body, "uid");
+	String type = extractJsonString(body, "type");
+	String target = extractJsonString(body, "target");
+	String label = extractJsonString(body, "label");
+	if (mapDisc(uid, type, target, label)) {
+		server.send(200, "application/json", "{\"status\":\"ok\"}");
+	} else {
+		server.send(400, "application/json", "{\"error\":\"invalid parameters\"}");
+	}
+}
+
+inline void handleApiDiscsDelete() {
+	String uid = "";
+	if (server.hasArg("uid")) {
+		uid = server.arg("uid");
+	} else if (server.hasArg("plain")) {
+		uid = extractJsonString(server.arg("plain"), "uid");
+	}
+	if (unmapDisc(uid)) {
+		server.send(200, "application/json", "{\"status\":\"ok\"}");
+	} else {
+		server.send(404, "application/json", "{\"error\":\"not found\"}");
+	}
 }
 
 inline void handleApiMp3() {
@@ -479,6 +533,10 @@ inline void initServer() {
 	server.on("/api/delete", HTTP_DELETE, handleApiDelete);
 	server.on("/api/download", HTTP_GET, handleApiDownload);
 	server.on("/api/upload", HTTP_POST, handleFileUploadResponse, handleFileUploadProcess);
+
+	server.on("/api/discs", HTTP_GET, handleApiDiscsGet);
+	server.on("/api/discs/map", HTTP_POST, handleApiDiscsMap);
+	server.on("/api/discs", HTTP_DELETE, handleApiDiscsDelete);
 
 	server.on("/api/player/toggle", HTTP_POST, handleApiPlayerToggle);
 	server.on("/api/player/status", HTTP_GET, handleApiPlayerStatus);

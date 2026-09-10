@@ -43,8 +43,9 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-mono);font-si
 .btn-refresh:hover{color:var(--amber)}
 .btn-refresh.spin{transform:rotate(180deg)}
 
-.nav-tabs{display:flex;border-bottom:1px solid var(--line);margin-bottom:24px;gap:8px}
-.nav-tab{background:none;border:none;color:var(--muted);font-family:var(--font-mono);font-size:13px;padding:10px 16px;cursor:pointer;border-bottom:2px solid transparent;transition:color .15s,border-color .15s}
+.nav-tabs{display:flex;border-bottom:1px solid var(--line);margin-bottom:24px;gap:8px;overflow-x:auto;overflow-y:hidden;white-space:nowrap;-webkit-overflow-scrolling:touch}
+.nav-tabs::-webkit-scrollbar{display:none}
+.nav-tab{background:none;border:none;color:var(--muted);font-family:var(--font-mono);font-size:13px;padding:10px 16px;cursor:pointer;border-bottom:2px solid transparent;transition:color .15s,border-color .15s;flex-shrink:0}
 .nav-tab:hover{color:var(--text)}
 .nav-tab.active{color:var(--amber);border-bottom-color:var(--amber)}
 
@@ -118,6 +119,13 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-mono);font-si
 .btn-play:hover{opacity:0.9}
 .btn-download{display:block;width:100%;text-align:center;padding:12px;background:var(--amber);color:#121110;text-decoration:none;font-weight:bold;font-size:12px;border-radius:2px;transition:opacity .15s}
 .btn-download:hover{opacity:0.9}
+
+.disc-row{display:grid;grid-template-columns:1fr auto;gap:12px;padding:14px 16px;background:var(--panel);border:1px solid var(--line);border-radius:2px;margin-bottom:10px;align-items:center}
+.disc-row.present{border-color:var(--amber)}
+.disc-main{min-width:0}
+.disc-title{font-size:14px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.disc-sub{font-size:11px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.badge-type{display:inline-block;padding:2px 6px;font-size:9px;text-transform:uppercase;border-radius:2px;background:var(--bg);border:1px solid var(--line);color:var(--amber);margin-right:6px}
 </style>
 </head>
 <body>
@@ -136,6 +144,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-mono);font-si
       <div class="reader-headline" id="readerHeadline">Waiting for disc...</div>
     </div>
     <div class="reader-controls">
+      <button class="btn-icon" id="btnAssignPrompt" style="display:none;background:var(--amber);color:#121110;font-weight:bold;border-radius:2px;padding:6px 10px" onclick="openMapModal(activeTagUid)">Assign</button>
       <button class="btn-reader-action" id="btnReaderPlay" onclick="toggleCurrentPlay()">&#9654;</button>
       <button class="btn-refresh" id="btnRefresh" onclick="fetchNow()" title="Refresh Status">&#x21bb;</button>
     </div>
@@ -143,6 +152,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-mono);font-si
 
   <div class="nav-tabs">
     <button class="nav-tab active" id="tabTracks" onclick="switchView('tracks')">Tracks</button>
+    <button class="nav-tab" id="tabDiscs" onclick="switchView('discs')">Discs</button>
     <button class="nav-tab" id="tabPlaylists" onclick="switchView('playlists')">Playlists</button>
     <button class="nav-tab" id="tabFiles" onclick="switchView('files')">Files</button>
   </div>
@@ -154,6 +164,14 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-mono);font-si
     </div>
     <div id="trackList"><div class="msg">Reading library...</div></div>
     <button class="btn-loadmore" id="btnLoadMore" style="display:none"></button>
+  </div>
+
+  <div id="viewDiscs" class="view">
+    <div class="head">
+      <div class="title">Discs Registry</div>
+      <div class="count" id="discsCount">...</div>
+    </div>
+    <div id="discsList"><div class="msg">Reading discs...</div></div>
   </div>
 
   <div id="viewPlaylists" class="view">
@@ -195,6 +213,36 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-mono);font-si
   </div>
 </div>
 
+<div class="drawer-overlay" id="mapModalOverlay" onclick="closeMapModal()"></div>
+<div class="drawer" id="mapModal">
+  <div class="drawer-top">
+    <div class="drawer-heading">Map RFID Disc</div>
+    <button class="drawer-close" onclick="closeMapModal()">&#10005;</button>
+  </div>
+  <div class="drawer-meta-list">
+    <div class="drawer-meta-item">
+      <span class="drawer-meta-label">Disc UID</span>
+      <span class="drawer-meta-val" id="modalUidVal" style="font-weight:bold;color:var(--amber)"></span>
+    </div>
+    <div class="drawer-meta-item">
+      <span class="drawer-meta-label">Label (Optional)</span>
+      <input type="text" id="modalLabelInput" style="background:var(--bg);border:1px solid var(--line);color:var(--text);padding:8px;font-family:inherit;font-size:12px;border-radius:2px" placeholder="e.g. Bedtime Album">
+    </div>
+    <div class="drawer-meta-item">
+      <span class="drawer-meta-label">Playback Target Type</span>
+      <select id="modalTypeSelect" onchange="onModalTypeChange()" style="background:var(--bg);border:1px solid var(--line);color:var(--text);padding:8px;font-family:inherit;font-size:12px;border-radius:2px">
+        <option value="track">Single Track</option>
+        <option value="playlist">Playlist</option>
+      </select>
+    </div>
+    <div class="drawer-meta-item">
+      <span class="drawer-meta-label" id="modalTargetLabel">Select Track</span>
+      <select id="modalTargetSelect" style="background:var(--bg);border:1px solid var(--line);color:var(--text);padding:8px;font-family:inherit;font-size:12px;border-radius:2px"></select>
+    </div>
+  </div>
+  <button class="btn-play" onclick="submitDiscMapping()">Save Mapping</button>
+</div>
+
 <div class="drawer-overlay" id="drawerOverlay" onclick="closeDrawer()"></div>
 <div class="drawer" id="trackDrawer">
   <div class="drawer-top">
@@ -225,22 +273,30 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-mono);font-si
 <script>
 let tracks = [];
 let playlists = [];
+let discs = [];
 let showAllTracks = false;
 let currentPlaylist = null;
 let currentPlaylistTracks = [];
 let playingPath = '';
 let playerState = 'stopped';
+let activeTagUid = '';
+let activeTagMapped = false;
 
 const tabTracks = document.getElementById('tabTracks');
+const tabDiscs = document.getElementById('tabDiscs');
 const tabPlaylists = document.getElementById('tabPlaylists');
 const tabFiles = document.getElementById('tabFiles');
 const viewTracks = document.getElementById('viewTracks');
+const viewDiscs = document.getElementById('viewDiscs');
 const viewPlaylists = document.getElementById('viewPlaylists');
 const viewFiles = document.getElementById('viewFiles');
 
 const libCount = document.getElementById('libCount');
 const trackList = document.getElementById('trackList');
 const btnLoadMore = document.getElementById('btnLoadMore');
+
+const discsCount = document.getElementById('discsCount');
+const discsList = document.getElementById('discsList');
 
 const plistCount = document.getElementById('plistCount');
 const plistCards = document.getElementById('plistCards');
@@ -274,7 +330,16 @@ const readerSub = document.getElementById('readerSub');
 const discDot = document.getElementById('discDot');
 const btnRefresh = document.getElementById('btnRefresh');
 const btnReaderPlay = document.getElementById('btnReaderPlay');
+const btnAssignPrompt = document.getElementById('btnAssignPrompt');
 const sysInfo = document.getElementById('sysInfo');
+
+const mapModalOverlay = document.getElementById('mapModalOverlay');
+const mapModal = document.getElementById('mapModal');
+const modalUidVal = document.getElementById('modalUidVal');
+const modalLabelInput = document.getElementById('modalLabelInput');
+const modalTypeSelect = document.getElementById('modalTypeSelect');
+const modalTargetLabel = document.getElementById('modalTargetLabel');
+const modalTargetSelect = document.getElementById('modalTargetSelect');
 
 function fmt(b){
   if(b < 1048576) return (b/1024).toFixed(1) + ' KB';
@@ -296,12 +361,15 @@ function fmtUptime(s){
 
 function switchView(viewName){
   tabTracks.classList.toggle('active', viewName === 'tracks');
+  tabDiscs.classList.toggle('active', viewName === 'discs');
   tabPlaylists.classList.toggle('active', viewName === 'playlists');
   tabFiles.classList.toggle('active', viewName === 'files');
   viewTracks.classList.toggle('active', viewName === 'tracks');
+  viewDiscs.classList.toggle('active', viewName === 'discs');
   viewPlaylists.classList.toggle('active', viewName === 'playlists');
   viewFiles.classList.toggle('active', viewName === 'files');
   if(viewName === 'files') loadTree();
+  if(viewName === 'discs') loadDiscs();
   if(viewName === 'playlists' && !currentPlaylist) loadPlaylists();
   if(viewName === 'tracks' && !tracks.length) loadLibrary();
 }
@@ -332,24 +400,44 @@ function fetchNow(){
         sysInfo.textContent = parts.join(' \u00B7 ');
       }
 
+      if(d.rfid && d.rfid.present){
+        activeTagUid = d.rfid.uid;
+        activeTagMapped = d.rfid.mapped;
+      } else {
+        activeTagUid = '';
+        activeTagMapped = false;
+      }
+
       if(!d.sd.ready){
         discDot.style.background = 'var(--red)';
         readerHeadline.textContent = 'SD Card Error / Not Detected';
         readerSub.textContent = 'storage error';
         btnReaderPlay.style.display = 'none';
+        btnAssignPrompt.style.display = 'none';
+      } else if(d.rfid && d.rfid.present && !d.rfid.mapped){
+        discDot.style.background = 'var(--amber)';
+        readerHeadline.textContent = 'Unmapped Tag: ' + d.rfid.uid;
+        readerSub.textContent = 'unmapped disc detected';
+        btnReaderPlay.style.display = 'none';
+        btnAssignPrompt.style.display = 'flex';
       } else if(playerState === 'playing'){
+        btnAssignPrompt.style.display = 'none';
         discDot.style.background = 'var(--green)';
-        readerHeadline.textContent = 'Playing: ' + cleanName(d.player.name || playingPath.split('/').pop());
-        readerSub.textContent = 'reader active';
+        const title = d.rfid && d.rfid.present && d.rfid.label ? d.rfid.label : cleanName(d.player.name || playingPath.split('/').pop());
+        readerHeadline.textContent = 'Playing: ' + title;
+        readerSub.textContent = d.rfid && d.rfid.present ? 'disc playing (' + d.rfid.uid + ')' : 'reader active';
         btnReaderPlay.style.display = 'flex';
         btnReaderPlay.innerHTML = '&#10074;&#10074;';
       } else if(playerState === 'paused'){
+        btnAssignPrompt.style.display = 'none';
         discDot.style.background = 'var(--amber)';
-        readerHeadline.textContent = 'Paused: ' + cleanName(d.player.name || playingPath.split('/').pop());
+        const title = d.rfid && d.rfid.present && d.rfid.label ? d.rfid.label : cleanName(d.player.name || playingPath.split('/').pop());
+        readerHeadline.textContent = 'Paused: ' + title;
         readerSub.textContent = 'reader paused';
         btnReaderPlay.style.display = 'flex';
         btnReaderPlay.innerHTML = '&#9654;';
       } else {
+        btnAssignPrompt.style.display = 'none';
         discDot.style.background = 'var(--amber)';
         readerHeadline.textContent = 'Waiting for disc...';
         readerSub.textContent = 'reader ready';
@@ -357,6 +445,7 @@ function fetchNow(){
       }
       renderTracksSlice();
       if(currentPlaylist) renderPlaylistTracks();
+      if(viewDiscs.classList.contains('active')) renderDiscs();
     })
     .catch(() => {
       if(btnRefresh) btnRefresh.classList.remove('spin');
@@ -364,6 +453,7 @@ function fetchNow(){
       readerHeadline.textContent = 'Device Unreachable';
       readerSub.textContent = 'offline';
       btnReaderPlay.style.display = 'none';
+      btnAssignPrompt.style.display = 'none';
     });
 }
 
@@ -486,6 +576,138 @@ function loadPlaylists(){
       `;
     }).join('');
   }).catch(()=>{ plistCards.innerHTML = '<div class="msg">Failed to load playlists.</div>'; });
+}
+
+function loadDiscs(){
+  fetch('/api/discs').then(r=>r.json()).then(d=>{
+    discs = d;
+    discsCount.textContent = d.length + ' registered discs';
+    renderDiscs();
+  }).catch(()=>{ discsList.innerHTML = '<div class="msg">Failed to load discs registry.</div>'; });
+}
+
+function renderDiscs(){
+  let banner = '';
+  if(activeTagUid && !activeTagMapped){
+    banner = `
+      <div style="margin-bottom:16px;padding:14px 16px;background:var(--panel);border:1px solid var(--amber);border-radius:2px;display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <div style="font-size:10px;color:var(--amber);text-transform:uppercase;letter-spacing:0.05em">Active Unmapped Tag</div>
+          <div style="font-size:14px;color:var(--text);font-weight:bold">${activeTagUid}</div>
+        </div>
+        <button class="btn-icon" style="background:var(--amber);color:#121110;font-weight:bold;padding:6px 12px;border-radius:2px" onclick="openMapModal('${activeTagUid}')">Map Disc</button>
+      </div>
+    `;
+  }
+  if(!discs.length && !activeTagUid){
+    discsList.innerHTML = banner + '<div class="msg">No discs mapped yet. Place an NFC tag near the reader to map it.</div>';
+    return;
+  }
+  const rows = discs.map(d => {
+    const isPresent = (activeTagUid === d.uid);
+    return `
+      <div class="disc-row ${isPresent ? 'present' : ''}">
+        <div class="disc-main">
+          <div class="disc-title">${d.label || d.target}</div>
+          <div class="disc-sub">
+            <span class="badge-type">${d.type}</span>
+            <span style="color:var(--dim);margin-right:8px">${d.uid}</span>
+            <span>${d.target}</span>
+          </div>
+        </div>
+        <div class="track-actions">
+          <button class="btn-icon" onclick="openMapModal('${d.uid}', '${d.type}', '${d.target.replace(/'/g,"\\'")}', '${(d.label||'').replace(/'/g,"\\'")}')">Edit</button>
+          <button class="btn-icon btn-del" onclick="deleteDiscMapping('${d.uid}')">&#10005;</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+  discsList.innerHTML = banner + rows;
+}
+
+function deleteDiscMapping(uid){
+  if(!confirm('Remove mapping for disc ' + uid + '?')) return;
+  fetch('/api/discs?uid=' + encodeURIComponent(uid), { method: 'DELETE' })
+    .then(r=>r.json())
+    .then(d=>{
+      if(d.status === 'ok'){
+        loadDiscs();
+        fetchNow();
+      } else alert(d.error || 'Failed to remove disc');
+    }).catch(()=>alert('Network error'));
+}
+
+function openMapModal(uid, type = 'track', target = '', label = ''){
+  if(!tracks.length) loadLibrary();
+  if(!playlists.length) loadPlaylists();
+
+  modalUidVal.textContent = uid;
+  modalLabelInput.value = label;
+  modalTypeSelect.value = type;
+
+  populateModalTargets(type, target);
+
+  mapModalOverlay.classList.add('open');
+  mapModal.classList.add('open');
+}
+
+function closeMapModal(){
+  mapModalOverlay.classList.remove('open');
+  mapModal.classList.remove('open');
+}
+
+function onModalTypeChange(){
+  populateModalTargets(modalTypeSelect.value);
+}
+
+function populateModalTargets(type, selected = ''){
+  modalTargetSelect.innerHTML = '';
+  if(type === 'track'){
+    modalTargetLabel.textContent = 'Select Track';
+    tracks.forEach(t => {
+      const opt = document.createElement('option');
+      opt.value = t.path;
+      opt.textContent = t.name;
+      if(t.path === selected) opt.selected = true;
+      modalTargetSelect.appendChild(opt);
+    });
+  } else {
+    modalTargetLabel.textContent = 'Select Playlist';
+    playlists.forEach(p => {
+      const base = p.name.replace('.m3u', '');
+      const opt = document.createElement('option');
+      opt.value = base;
+      opt.textContent = base + ' (' + p.trackCount + ' tracks)';
+      if(base === selected) opt.selected = true;
+      modalTargetSelect.appendChild(opt);
+    });
+  }
+}
+
+function submitDiscMapping(){
+  const uid = modalUidVal.textContent;
+  const label = modalLabelInput.value.trim();
+  const type = modalTypeSelect.value;
+  const target = modalTargetSelect.value;
+
+  if(!target){
+    alert('Please select a target song or playlist.');
+    return;
+  }
+
+  fetch('/api/discs/map', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ uid, type, target, label })
+  }).then(r=>r.json()).then(d=>{
+    if(d.status === 'ok'){
+      closeMapModal();
+      loadDiscs();
+      fetchNow();
+    } else {
+      alert(d.error || 'Failed to save mapping');
+    }
+  }).catch(()=>alert('Network error'));
 }
 
 function openPlaylist(name){
@@ -644,7 +866,7 @@ function showAddPrompt(path){
 
 function isDbOrSysFile(name){
   const n = name.toLowerCase();
-  return n.endsWith('.db') || n.endsWith('.dat') || n.endsWith('.idx') || n.endsWith('.bin') || n.endsWith('.sys') || n === 'thumbs.db' || n === '.ds_store';
+  return n.endsWith('.db') || n.endsWith('.dat') || n.endsWith('.idx') || n.endsWith('.bin') || n.endsWith('.sys') || n === 'thumbs.db' || n === '.ds_store' || n === 'discs.csv';
 }
 
 function fetchLevel(path){
@@ -779,8 +1001,10 @@ fileInput.onchange = () => {
 };
 
 fetchNow();
+setInterval(fetchNow, 2000);
 loadLibrary();
 loadPlaylists();
+loadDiscs();
 </script>
 </body>
 </html>
