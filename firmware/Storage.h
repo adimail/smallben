@@ -48,12 +48,63 @@ inline bool initStorage() {
 }
 
 inline bool isJunk(String name) {
+	for (size_t i = 0; i < NUM_HIDDEN_PREFIXES; i++) {
+		if (name.startsWith(HIDDEN_PREFIXES[i])) {
+			return true;
+		}
+	}
+
 	String lower = name;
 	lower.toLowerCase();
-	return name.startsWith(".") || name.startsWith("._") || lower == "system volume information" ||
-		   lower == "thumbs.db" || lower == "playlists" || lower.endsWith(".db") ||
-		   lower.endsWith(".dat") || lower.endsWith(".idx") || lower.endsWith(".bin") ||
-		   lower.endsWith(".sys") || lower.endsWith(".m3u");
+
+	for (size_t i = 0; i < NUM_HIDDEN_EXACT_NAMES; i++) {
+		if (lower == HIDDEN_EXACT_NAMES[i]) {
+			return true;
+		}
+	}
+
+	for (size_t i = 0; i < NUM_HIDDEN_EXTENSIONS; i++) {
+		if (lower.endsWith(HIDDEN_EXTENSIONS[i])) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+inline bool isProtectedStoragePath(const String &path) {
+	String lower = path;
+	lower.toLowerCase();
+
+	while (lower.startsWith("/")) {
+		lower = lower.substring(1);
+	}
+	while (lower.endsWith("/")) {
+		lower = lower.substring(0, lower.length() - 1);
+	}
+
+	for (size_t i = 0; i < NUM_HIDDEN_EXACT_NAMES; i++) {
+		String target = HIDDEN_EXACT_NAMES[i];
+		if (lower == target || lower.startsWith(target + "/")) {
+			return true;
+		}
+	}
+
+	for (size_t i = 0; i < NUM_HIDDEN_EXTENSIONS; i++) {
+		if (lower.endsWith(HIDDEN_EXTENSIONS[i])) {
+			return true;
+		}
+	}
+
+	int lastSlash = path.lastIndexOf('/');
+	String filename = (lastSlash != -1) ? path.substring(lastSlash + 1) : path;
+	for (size_t i = 0; i < NUM_HIDDEN_PREFIXES; i++) {
+		if (filename.startsWith(HIDDEN_PREFIXES[i])) {
+			return true;
+		}
+	}
+
+	return false;
 }
 
 inline bool isMp3(String name) {
@@ -86,9 +137,7 @@ inline String getPlaylistPath(String name) {
 }
 
 inline bool deleteStoragePath(const String &path) {
-	String lower = path;
-	lower.toLowerCase();
-	if (lower == "/playlists" || lower.startsWith("/playlists/") || lower.endsWith(".m3u")) {
+	if (isProtectedStoragePath(path)) {
 		return false;
 	}
 	if (!SD.exists(path))
@@ -111,7 +160,9 @@ inline bool deleteStoragePath(const String &path) {
 		if (isDir) {
 			deleteStoragePath(childPath);
 		} else {
-			SD.remove(childPath);
+			if (!isProtectedStoragePath(childPath)) {
+				SD.remove(childPath);
+			}
 		}
 		entry = target.openNextFile();
 	}

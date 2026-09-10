@@ -11,7 +11,6 @@ WebServer server(HTTP_PORT);
 static File uploadFile;
 static bool uploadAborted = false;
 static size_t uploadBytesWritten = 0;
-const size_t MAX_UPLOAD_SIZE = 31457280;
 
 inline String jsonEscape(const String &in) {
 	String out;
@@ -187,6 +186,10 @@ inline void handleFileUploadProcess() {
 			filename = filename.substring(slashIndex + 1);
 
 		String fullPath = (targetDir == "/" ? "" : targetDir) + "/" + filename;
+		if (isProtectedStoragePath(fullPath)) {
+			uploadAborted = true;
+			return;
+		}
 		if (SD.exists(fullPath)) {
 			SD.remove(fullPath);
 		}
