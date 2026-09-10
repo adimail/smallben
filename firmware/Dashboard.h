@@ -50,7 +50,8 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-mono);font-si
 .title{font-family:var(--font-serif);font-size:20px;font-weight:400}
 .count{color:var(--dim);font-size:12px}
 
-.track-row{display:grid;grid-template-columns:30px 1fr auto auto;gap:10px;padding:12px 0;border-bottom:1px solid var(--line);align-items:center}
+.track-row{display:grid;grid-template-columns:30px 1fr auto auto;gap:10px;padding:12px 0;border-bottom:1px solid var(--line);align-items:center;cursor:pointer;transition:background .15s}
+.track-row:hover{background:rgba(255,255,255,0.02)}
 .num{color:var(--dim);font-size:12px}
 .track-main{min-width:0}
 .track-title{color:var(--text);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -91,6 +92,24 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-mono);font-si
 .progress-bar{height:100%;width:0%;background:var(--amber);transition:width .1s}
 .progress-txt{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:9px;color:var(--text);font-weight:bold}
 .msg{color:var(--dim);padding:20px 0;text-align:center}
+
+.drawer-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.6);opacity:0;pointer-events:none;transition:opacity .2s ease;z-index:90}
+.drawer-overlay.open{opacity:1;pointer-events:auto}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:360px;max-width:88vw;background:var(--panel);border-left:1px solid var(--line);box-shadow:-6px 0 28px rgba(0,0,0,0.6);transform:translateX(100%);transition:transform .25s cubic-bezier(0.16,1,0.3,1);z-index:100;display:flex;flex-direction:column;padding:24px;overflow-y:auto}
+.drawer.open{transform:translateX(0)}
+.drawer-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
+.drawer-heading{font-family:var(--font-serif);font-size:18px;font-weight:600}
+.drawer-close{background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer;padding:4px}
+.drawer-close:hover{color:var(--text)}
+.drawer-name{font-family:var(--font-serif);font-size:16px;color:var(--text);margin-bottom:16px;word-break:break-word}
+.drawer-meta-list{display:flex;flex-direction:column;gap:14px;margin-bottom:24px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:16px 0}
+.drawer-meta-item{display:flex;flex-direction:column;gap:4px}
+.drawer-meta-label{font-size:10px;text-transform:uppercase;color:var(--muted);letter-spacing:0.05em}
+.drawer-meta-val{font-size:12px;color:var(--text);word-break:break-all}
+.drawer-tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.drawer-tag{background:var(--bg);border:1px solid var(--line);color:var(--amber);padding:3px 8px;border-radius:2px;font-size:11px}
+.btn-download{display:block;width:100%;text-align:center;padding:12px;background:var(--amber);color:#121110;text-decoration:none;font-weight:bold;font-size:12px;border-radius:2px;transition:opacity .15s}
+.btn-download:hover{opacity:0.9}
 </style>
 </head>
 <body>
@@ -162,6 +181,30 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-mono);font-si
   </div>
 </div>
 
+<div class="drawer-overlay" id="drawerOverlay" onclick="closeDrawer()"></div>
+<div class="drawer" id="trackDrawer">
+  <div class="drawer-top">
+    <div class="drawer-heading">Track Details</div>
+    <button class="drawer-close" onclick="closeDrawer()">&#10005;</button>
+  </div>
+  <div class="drawer-name" id="dName"></div>
+  <div class="drawer-meta-list">
+    <div class="drawer-meta-item">
+      <span class="drawer-meta-label">Playlists</span>
+      <div class="drawer-meta-val" id="dPlaylists">Scanning...</div>
+    </div>
+    <div class="drawer-meta-item">
+      <span class="drawer-meta-label">Location</span>
+      <span class="drawer-meta-val" id="dPath"></span>
+    </div>
+    <div class="drawer-meta-item">
+      <span class="drawer-meta-label">Size</span>
+      <span class="drawer-meta-val" id="dSize"></span>
+    </div>
+  </div>
+  <a class="btn-download" id="dDownload" href="#" download>Download Track</a>
+</div>
+
 <script>
 let tracks = [];
 let playlists = [];
@@ -199,6 +242,14 @@ const pBox = document.getElementById('pBox');
 const pBar = document.getElementById('pBar');
 const pTxt = document.getElementById('pTxt');
 
+const drawerOverlay = document.getElementById('drawerOverlay');
+const trackDrawer = document.getElementById('trackDrawer');
+const dName = document.getElementById('dName');
+const dPlaylists = document.getElementById('dPlaylists');
+const dPath = document.getElementById('dPath');
+const dSize = document.getElementById('dSize');
+const dDownload = document.getElementById('dDownload');
+
 function fmt(b){ return b < 1048576 ? (b/1024).toFixed(1)+' KB' : (b/1048576).toFixed(1)+' MB'; }
 
 function cleanName(n){ return n.replace(/\.[^/.]+$/, ''); }
@@ -223,7 +274,7 @@ function renderTracksSlice(){
   }
   const visible = showAllTracks ? tracks : tracks.slice(0, 5);
   trackList.innerHTML = visible.map((t, i) => `
-    <div class="track-row">
+    <div class="track-row" onclick="openDrawer(${i})">
       <span class="num">${String(i+1).padStart(2,'0')}</span>
       <div class="track-main">
         <div class="track-title">${cleanName(t.name)}</div>
@@ -231,7 +282,7 @@ function renderTracksSlice(){
       </div>
       <span class="track-size">${fmt(t.size)}</span>
       <div class="track-actions">
-        <button class="btn-icon" onclick="addToPlaylistPrompt('${t.path.replace(/'/g,"\\'")}')">+ list</button>
+        <button class="btn-icon" onclick="event.stopPropagation();addToPlaylistPrompt('${t.path.replace(/'/g,"\\'")}')">+ list</button>
       </div>
     </div>
   `).join('');
@@ -248,6 +299,53 @@ btnLoadMore.onclick = () => {
   showAllTracks = !showAllTracks;
   renderTracksSlice();
 };
+
+function closeDrawer(){
+  drawerOverlay.classList.remove('open');
+  trackDrawer.classList.remove('open');
+}
+
+async function openDrawer(idx){
+  const t = tracks[idx];
+  if(!t) return;
+  dName.textContent = t.name;
+  dPath.textContent = t.path;
+  dSize.textContent = fmt(t.size);
+  dPlaylists.textContent = 'Scanning playlists...';
+  dDownload.href = '/api/download?path=' + encodeURIComponent(t.path);
+  dDownload.setAttribute('download', t.name);
+
+  drawerOverlay.classList.add('open');
+  trackDrawer.classList.add('open');
+
+  try{
+    const res = await fetch('/api/playlists');
+    const plists = await res.json();
+    playlists = plists;
+    let matchNames = [];
+    const checks = plists.map(p => {
+      const base = p.name.replace('.m3u','');
+      return fetch('/api/playlists/' + encodeURIComponent(base) + '/tracks')
+        .then(r => r.json())
+        .then(trks => {
+          if(trks.some(tk => tk.path === t.path)) {
+            matchNames.push(base);
+          }
+        })
+        .catch(()=>{});
+    });
+    await Promise.all(checks);
+    if(matchNames.length === 0){
+      dPlaylists.innerHTML = '<span>Part of 0 playlists</span>';
+    } else {
+      const countLabel = matchNames.length === 1 ? 'Part of 1 playlist:' : `Part of ${matchNames.length} playlists:`;
+      const tags = matchNames.map(name => `<span class="drawer-tag">${name}</span>`).join('');
+      dPlaylists.innerHTML = `<div>${countLabel}</div><div class="drawer-tags">${tags}</div>`;
+    }
+  }catch(e){
+    dPlaylists.textContent = 'Unavailable';
+  }
+}
 
 function loadLibrary(){
   fetch('/api/mp3').then(r=>r.json()).then(d=>{
