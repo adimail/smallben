@@ -51,8 +51,9 @@ inline bool isJunk(String name) {
 	String lower = name;
 	lower.toLowerCase();
 	return name.startsWith(".") || name.startsWith("._") || lower == "system volume information" ||
-		   lower == "thumbs.db" || lower.endsWith(".db") || lower.endsWith(".dat") ||
-		   lower.endsWith(".idx") || lower.endsWith(".bin") || lower.endsWith(".sys");
+		   lower == "thumbs.db" || lower == "playlists" || lower.endsWith(".db") ||
+		   lower.endsWith(".dat") || lower.endsWith(".idx") || lower.endsWith(".bin") ||
+		   lower.endsWith(".sys") || lower.endsWith(".m3u");
 }
 
 inline bool isMp3(String name) {
@@ -85,6 +86,11 @@ inline String getPlaylistPath(String name) {
 }
 
 inline bool deleteStoragePath(const String &path) {
+	String lower = path;
+	lower.toLowerCase();
+	if (lower == "/playlists" || lower.startsWith("/playlists/") || lower.endsWith(".m3u")) {
+		return false;
+	}
 	if (!SD.exists(path))
 		return false;
 	File target = SD.open(path);
@@ -174,7 +180,10 @@ template <typename Callback> inline void iteratePlaylists(Callback cb) {
 		if (!entry)
 			break;
 		String name = entry.name();
-		if (!entry.isDirectory() && name.endsWith(".m3u") && !isJunk(name)) {
+		String lower = name;
+		lower.toLowerCase();
+		if (!entry.isDirectory() && lower.endsWith(".m3u") && !name.startsWith(".") &&
+			!name.startsWith("._")) {
 			String fullPath = "/playlists/" + name;
 			int tracks = countPlaylistTracks(fullPath);
 			cb(name, tracks);
