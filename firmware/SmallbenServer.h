@@ -1,5 +1,6 @@
 #pragma once
 #include "AudioEngine.h"
+#include "BluetoothEngine.h"
 #include "Config.h"
 #include "Dashboard.h"
 #include "RfidEngine.h"
@@ -159,11 +160,14 @@ inline void handleNow() {
 	}
 
 	String stateStr = "stopped";
-	if (audio.isPlaying) {
+	if (isBluetoothActive()) {
+		stateStr = isBluetoothConnected() ? "bluetooth_connected" : "bluetooth_pairing";
+	} else if (audio.isPlaying) {
 		stateStr = audio.isPaused ? "paused" : "playing";
 	}
 
 	String json = "{";
+	json += "\"mode\":\"" + String(isBluetoothActive() ? "bluetooth" : "disc") + "\",";
 	json += "\"player\":{";
 	json += "\"state\":\"" + stateStr + "\",";
 	json += "\"path\":\"" + jsonEscape(pathStr) + "\",";
@@ -643,6 +647,10 @@ inline void handleApiPlaylistTracksAppend() {
 }
 
 inline void handleApiPlayerToggle() {
+	if (isBluetoothActive()) {
+		server.send(403, "application/json", "{\"error\":\"device in bluetooth mode\"}");
+		return;
+	}
 	String path = "";
 	if (server.hasArg("path")) {
 		path = server.arg("path");
@@ -667,7 +675,9 @@ inline void handleApiPlayerToggle() {
 inline void handleApiPlayerStatus() {
 	AudioStateSnapshot snap = getAudioSnapshot();
 	String state = "stopped";
-	if (snap.isPlaying) {
+	if (isBluetoothActive()) {
+		state = isBluetoothConnected() ? "bluetooth_connected" : "bluetooth_pairing";
+	} else if (snap.isPlaying) {
 		state = snap.isPaused ? "paused" : "playing";
 	}
 	server.send(200, "application/json",

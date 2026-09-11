@@ -113,8 +113,29 @@ inline void stopAudioInternal() {
 	clearAudioPathReserved();
 }
 
+inline void releaseAudioI2S() {
+	stopAudioInternal();
+	if (audioOut) {
+		delete audioOut;
+		audioOut = nullptr;
+	}
+}
+
+inline void reclaimAudioI2S() {
+	if (!audioOut) {
+		audioOut = new AudioOutputI2S();
+		if (audioOut) {
+			audioOut->SetPinout(I2S_BCLK_PIN, I2S_LRC_PIN, I2S_DIN_PIN);
+			audioOut->SetGain(0.85);
+		}
+	}
+}
+
 inline bool startTrackInternal(const char *path) {
 	stopAudioInternal();
+	if (!audioOut) {
+		return false;
+	}
 	if (!path || strlen(path) == 0) {
 		return false;
 	}
@@ -159,6 +180,9 @@ inline bool startTrackInternal(const char *path) {
 }
 
 inline void togglePlayInternal(const char *path) {
+	if (!audioOut) {
+		return;
+	}
 	AudioStateSnapshot snap = getAudioSnapshot();
 	if (snap.isPlaying && strcmp(snap.path, path) == 0) {
 		bool newPaused = !snap.isPaused;
@@ -250,12 +274,7 @@ inline bool initAudio() {
 			return false;
 		}
 	}
-	audioOut = new AudioOutputI2S();
-	if (!audioOut) {
-		return false;
-	}
-	audioOut->SetPinout(I2S_BCLK_PIN, I2S_LRC_PIN, I2S_DIN_PIN);
-	audioOut->SetGain(0.85);
+	reclaimAudioI2S();
 	setAudioPathActiveChecker(isAudioPathActive);
 	return true;
 }

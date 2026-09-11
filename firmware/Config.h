@@ -19,9 +19,13 @@
 #define WIFI_BUTTON_PIN 32
 #define WIFI_LED_PIN 33
 
+#define MODE_SWITCH_PIN 16
+
 const char *AP_SSID = "Smallben-Setup";
 const char *AP_PASS = "smallben123";
 const uint16_t HTTP_PORT = 80;
+
+const char *BT_DEVICE_NAME = "Smallben";
 
 const size_t MAX_UPLOAD_SIZE = 31457280;
 const size_t MAX_JSON_BODY_SIZE = 16384;

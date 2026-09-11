@@ -36,6 +36,7 @@ static String g_rfidCurrentUid = "";
 static bool g_rfidIsPresent = false;
 static int g_rfidMissedPings = 0;
 static bool g_rfidAudioPlaying = false;
+static bool g_rfidEngineEnabled = true;
 
 inline void ensureRfidMutex() {
 	if (!rfidMutex) {
@@ -59,6 +60,17 @@ class RfidGuard {
 	RfidGuard(const RfidGuard &) = delete;
 	RfidGuard &operator=(const RfidGuard &) = delete;
 };
+
+inline void setRfidEnabled(bool enabled) {
+	RfidGuard rGuard;
+	g_rfidEngineEnabled = enabled;
+	if (!enabled) {
+		g_rfidIsPresent = false;
+		g_rfidCurrentUid = "";
+		g_rfidMissedPings = 0;
+		g_rfidAudioPlaying = false;
+	}
+}
 
 inline void loadDiscMappings() {
 	std::map<String, DiscMapping> loaded;
@@ -297,6 +309,13 @@ inline bool scanCardPresence(String &outUid) {
 }
 
 inline void handleRfidPoll() {
+	{
+		RfidGuard rGuard;
+		if (!g_rfidEngineEnabled) {
+			return;
+		}
+	}
+
 	String detectedUid = "";
 	bool found = scanCardPresence(detectedUid);
 	if (found) {
@@ -305,6 +324,9 @@ inline void handleRfidPoll() {
 		bool hasMapping = false;
 		{
 			RfidGuard rGuard;
+			if (!g_rfidEngineEnabled) {
+				return;
+			}
 			if (!g_rfidIsPresent || detectedUid != g_rfidCurrentUid) {
 				isNew = true;
 				g_rfidCurrentUid = detectedUid;
