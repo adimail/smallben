@@ -203,7 +203,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-mono);font-si
     <div class="head">
       <div class="title">File Storage</div>
       <button class="btn-link" id="btnUp">&#8593; Upload File</button>
-      <input type="file" id="fileInput" style="display:none" accept=".mp3">
+      <input type="file" id="fileInput" style="display:none">
     </div>
     <div class="progress-box" id="pBox">
       <div class="progress-bar" id="pBar"></div>
@@ -281,6 +281,7 @@ let playingPath = '';
 let playerState = 'stopped';
 let activeTagUid = '';
 let activeTagMapped = false;
+let isFetchingNow = false;
 
 const tabTracks = document.getElementById('tabTracks');
 const tabDiscs = document.getElementById('tabDiscs');
@@ -383,6 +384,8 @@ tabPlaylists.onclick = () => switchView('playlists');
 tabFiles.onclick = () => switchView('files');
 
 function fetchNow(){
+  if(isFetchingNow) return;
+  isFetchingNow = true;
   if(btnRefresh) btnRefresh.classList.add('spin');
   fetch('/now')
     .then(r => r.json())
@@ -462,6 +465,10 @@ function fetchNow(){
       readerSub.textContent = 'offline';
       btnReaderPlay.style.display = 'none';
       btnAssignPrompt.style.display = 'none';
+    })
+    .finally(() => {
+      isFetchingNow = false;
+      setTimeout(fetchNow, 2000);
     });
 }
 
@@ -891,7 +898,6 @@ function renderPlaylistTracks(){
     title.className = 'track-title';
     title.textContent = cleanName(t.name);
     const sub = document.createElement('div');
-    sub.className = 'track-sub';
     sub.textContent = t.path;
     main.appendChild(title);
     main.appendChild(sub);
@@ -1163,11 +1169,6 @@ btnUp.onclick = () => fileInput.click();
 fileInput.onchange = () => {
   if(!fileInput.files || fileInput.files.length === 0) return;
   const file = fileInput.files[0];
-  if(!file.name.toLowerCase().endsWith('.mp3')){
-    alert('Only MP3 audio files can be uploaded.');
-    fileInput.value = '';
-    return;
-  }
   if(file.size > 31457280){
     alert('File exceeds the 30MB size limit.');
     fileInput.value = '';
@@ -1183,7 +1184,7 @@ fileInput.onchange = () => {
     if(e.lengthComputable){
       const pct = Math.round((e.loaded / e.total) * 100);
       pBar.style.width = pct + '%';
-      pTxt.textContent = pct + '%';
+      pTxt.textContent = pct === 100 ? 'Saving...' : pct + '%';
     }
   };
   xhr.onload = () => {
@@ -1191,8 +1192,8 @@ fileInput.onchange = () => {
     btnUp.disabled = false;
     fileInput.value = '';
     if(xhr.status >= 200 && xhr.status < 300){
-      loadLibrary();
       loadTree();
+      loadLibrary();
     } else {
       alert('Upload failed: ' + (xhr.responseText || 'Server error'));
     }
@@ -1209,7 +1210,6 @@ fileInput.onchange = () => {
 };
 
 fetchNow();
-setInterval(fetchNow, 2000);
 loadLibrary();
 loadPlaylists();
 loadDiscs();

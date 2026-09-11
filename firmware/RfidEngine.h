@@ -11,6 +11,8 @@
 #include <map>
 #include <vector>
 
+enum class UnmapResult { Ok, NotFound, StorageError };
+
 struct DiscMapping {
 	String uid;
 	String type;
@@ -72,84 +74,101 @@ inline void setRfidEnabled(bool enabled) {
 	}
 }
 
+inline String sanitizeField(const String &input) {
+	String out = input;
+	out.replace("|", "-");
+	out.replace("\r", "");
+	out.replace("\n", "");
+	out.trim();
+	return out;
+}
+
 inline void loadDiscMappings() {
+	if (!isSdReady()) {
+		RfidGuard rGuard;
+		g_discMappings.clear();
+		return;
+	}
 	std::map<String, DiscMapping> loaded;
 	{
 		SdGuard guard;
-		if (!SD.exists("/discs.csv")) {
-			RfidGuard rGuard;
-			g_discMappings.clear();
-			return;
-		}
-		File f = SD.open("/discs.csv", FILE_READ);
-		if (!f) {
-			return;
-		}
-		while (f.available()) {
-			String line = f.readStringUntil('\n');
-			line.trim();
-			if (line.length() == 0)
-				continue;
-			int p1 = line.indexOf('|');
-			if (p1 == -1)
-				continue;
-			int p2 = line.indexOf('|', p1 + 1);
-			if (p2 == -1)
-				continue;
-			int p3 = line.indexOf('|', p2 + 1);
-			if (p3 == -1)
-				continue;
-			String uid = line.substring(0, p1);
-			String type = line.substring(p1 + 1, p2);
-			String target = line.substring(p2 + 1, p3);
-			String label = line.substring(p3 + 1);
-			if (loaded.size() < MAX_DISCS_MAPPINGS) {
-				loaded[uid] = {uid, type, target, label};
+		if (SD.exists("/discs.csv")) {
+			File f = SD.open("/discs.csv", FILE_READ);
+			if (f) {
+				while (f.available()) {
+					String line = f.readStringUntil('\n');
+					line.trim();
+					if (line.length() == 0)
+						continue;
+					int p1 = line.indexOf('|');
+					int p2 = (p1 != -1) ? line.indexOf('|', p1 + 1) : -1;
+					int p3 = (p2 != -1) ? line.indexOf('|', p2 + 1) : -1;
+					if (p1 != -1 && p2 != -1 && p3 != -1) {
+						String uid = line.substring(0, p1);
+						String type = line.substring(p1 + 1, p2);
+						String target = line.substring(p2 + 1, p3);
+						String label = line.substring(p3 + 1);
+						if (uid.length() > 0 && target.length() > 0) {
+							loaded[uid] = {uid, type, target, label};
+						}
+					}
+				}
+				f.close();
 			}
 		}
-		f.close();
 	}
 	RfidGuard rGuard;
 	g_discMappings = loaded;
 }
 
 inline bool saveDiscMappingsFile(const std::map<String, DiscMapping> &mappings) {
-	SdGuard guard;
-	String tempPath = "/discs.tmp";
-	if (SD.exists(tempPath)) {
-		SD.remove(tempPath);
+	if (!isSdReady()) {
+		return false;
 	}
-	File f = SD.open(tempPath, FILE_WRITE);
+	SdGuard guard;
+	if (SD.exists("/discs.csv")) {
+		SD.remove("/discs.csv");
+	}
+	File f = SD.open("/discs.csv", FILE_WRITE);
 	if (!f) {
 		return false;
 	}
-	bool writeFailed = false;
 	for (const auto &pair : mappings) {
-		String line = pair.second.uid + "|" + pair.second.type + "|" + pair.second.target + "|" +
-					  pair.second.label;
-		if (f.println(line) == 0) {
-			writeFailed = true;
-			break;
-		}
+		f.println(pair.second.uid + "|" + pair.second.type + "|" + pair.second.target + "|" +
+				  pair.second.label);
 	}
 	f.close();
-	if (writeFailed) {
-		SD.remove(tempPath);
-		return false;
-	}
-	if (!atomicReplaceFile(tempPath, "/discs.csv")) {
-		SD.remove(tempPath);
-		return false;
-	}
-	refreshSdStatsDirect();
 	return true;
 }
 
-inline bool mapDisc(const String &uid, const String &type, const String &target,
-					const String &label) {
+inline bool mapDisc(const String &rawUid, const String &rawType, const String &rawTarget,
+					const String &rawLabel) {
+	if (!isSdReady()) {
+		return false;
+	}
+
+	String uid = sanitizeField(rawUid);
+	String type = sanitizeField(rawType);
+	String target = sanitizeField(rawTarget);
+	String label = sanitizeField(rawLabel);
+
 	if (uid.length() == 0 || (type != "track" && type != "playlist") || target.length() == 0) {
 		return false;
 	}
+
+	{
+		SdGuard guard;
+		if (type == "track") {
+			if (!isSafePath(target) || !isMp3(target) || !SD.exists(target)) {
+				return false;
+			}
+		} else if (type == "playlist") {
+			if (!isSafePlaylistName(target) || !SD.exists(getPlaylistPath(target))) {
+				return false;
+			}
+		}
+	}
+
 	std::map<String, DiscMapping> updated;
 	{
 		RfidGuard rGuard;
@@ -167,30 +186,64 @@ inline bool mapDisc(const String &uid, const String &type, const String &target,
 		RfidGuard rGuard;
 		g_discMappings = updated;
 	}
+
+	bool shouldPlayNow = false;
+	{
+		RfidGuard rGuard;
+		if (g_rfidEngineEnabled && g_rfidIsPresent && g_rfidCurrentUid == uid &&
+			!g_rfidAudioPlaying) {
+			shouldPlayNow = true;
+		}
+	}
+
+	if (shouldPlayNow) {
+		requestAudioStop();
+		if (type == "track") {
+			if (requestAudioPlay(target)) {
+				RfidGuard rGuard;
+				g_rfidAudioPlaying = true;
+			}
+		} else if (type == "playlist") {
+			String first = getPlaylistFirstTrack(target);
+			if (first.length() > 0 && requestAudioPlay(first)) {
+				RfidGuard rGuard;
+				g_rfidAudioPlaying = true;
+			}
+		}
+	}
+
 	return true;
 }
 
-inline bool unmapDisc(const String &uid) {
+inline UnmapResult unmapDisc(const String &rawUid) {
+	if (!isSdReady()) {
+		return UnmapResult::StorageError;
+	}
+
+	String uid = sanitizeField(rawUid);
 	std::map<String, DiscMapping> updated;
 	{
 		RfidGuard rGuard;
 		if (g_discMappings.find(uid) == g_discMappings.end()) {
-			return false;
+			return UnmapResult::NotFound;
 		}
 		updated = g_discMappings;
 		updated.erase(uid);
 	}
 	if (!saveDiscMappingsFile(updated)) {
-		return false;
+		return UnmapResult::StorageError;
 	}
 	{
 		RfidGuard rGuard;
 		g_discMappings = updated;
 	}
-	return true;
+	return UnmapResult::Ok;
 }
 
 inline bool cascadeRenamePlaylist(const String &oldName, const String &newName) {
+	if (!isSdReady()) {
+		return false;
+	}
 	std::map<String, DiscMapping> updated;
 	bool changed = false;
 	{
@@ -219,6 +272,9 @@ inline bool cascadeRenamePlaylist(const String &oldName, const String &newName) 
 }
 
 inline bool cascadeDeletePlaylist(const String &name) {
+	if (!isSdReady()) {
+		return false;
+	}
 	std::map<String, DiscMapping> updated;
 	bool changed = false;
 	{

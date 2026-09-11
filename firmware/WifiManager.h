@@ -13,21 +13,23 @@ static unsigned long wifiLastDebounceTime = 0;
 const unsigned long WIFI_BUTTON_DEBOUNCE_MS = 40;
 
 inline void enableWiFi() {
-	if (wifiEnabled)
+	if (wifiEnabled || isBluetoothActive())
 		return;
 
 	WiFi.mode(WIFI_AP);
 
-	if (!WiFi.softAP(AP_SSID, AP_PASS))
+	if (!WiFi.softAP(AP_SSID, AP_PASS_DEFAULT, 1, 0, 2)) {
+		WiFi.softAPdisconnect(true);
+		WiFi.mode(WIFI_OFF);
+		digitalWrite(WIFI_LED_PIN, LOW);
+		wifiEnabled = false;
 		return;
+	}
 
 	server.begin();
 
 	wifiEnabled = true;
 	digitalWrite(WIFI_LED_PIN, HIGH);
-
-	Serial.print("[WiFi] AP started. IP: ");
-	Serial.println(WiFi.softAPIP());
 }
 
 inline void disableWiFi() {
@@ -36,11 +38,10 @@ inline void disableWiFi() {
 
 	server.stop();
 	WiFi.softAPdisconnect(true);
+	WiFi.mode(WIFI_OFF);
 
 	wifiEnabled = false;
 	digitalWrite(WIFI_LED_PIN, LOW);
-
-	Serial.println("[WiFi] AP stopped.");
 }
 
 inline void toggleWiFi() {

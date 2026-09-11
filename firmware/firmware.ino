@@ -16,14 +16,22 @@ const unsigned long MODE_SWITCH_DEBOUNCE_MS = 50;
 
 void applyMode(PlaybackMode mode) {
 	if (mode == PlaybackMode::Bluetooth) {
+		disableWiFi();
 		setRfidEnabled(false);
 		requestAudioStop();
-		releaseAudioI2S();
-		startBluetooth();
+		requestAudioReleaseI2SBlocking();
+		vTaskDelay(pdMS_TO_TICKS(100));
+		if (!startBluetooth()) {
+			requestAudioReclaimI2SBlocking();
+			setRfidEnabled(true);
+			currentMode = PlaybackMode::Disc;
+			return;
+		}
 		currentMode = PlaybackMode::Bluetooth;
 	} else {
 		stopBluetooth();
-		reclaimAudioI2S();
+		vTaskDelay(pdMS_TO_TICKS(50));
+		requestAudioReclaimI2SBlocking();
 		setRfidEnabled(true);
 		currentMode = PlaybackMode::Disc;
 	}
@@ -63,20 +71,28 @@ void setup() {
 	Serial.begin(115200);
 	delay(200);
 
-	initAudio();
-	initStorage();
+	bool audioOk = initAudio();
+	bool storageOk = initStorage();
 	initServer();
-	initRfid();
+	bool rfidOk = initRfid();
 
 	initWiFiControl();
-	initModeSwitch();
 
-	startAudioTask();
-	startRfidTask();
+	if (audioOk) {
+		startAudioTask();
+	}
+	if (rfidOk && storageOk) {
+		startRfidTask();
+	}
+
+	delay(100);
+	initModeSwitch();
 }
 
 void loop() {
-	handleWiFiButton();
+	if (currentMode != PlaybackMode::Bluetooth) {
+		handleWiFiButton();
+	}
 	handleModeSwitch();
 
 	if (isWiFiEnabled()) {

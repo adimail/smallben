@@ -162,7 +162,7 @@ inline void handleNow() {
 	String stateStr = "stopped";
 	if (isBluetoothActive()) {
 		stateStr = isBluetoothConnected() ? "bluetooth_connected" : "bluetooth_pairing";
-	} else if (audio.isPlaying) {
+	} else if (audio.valid && audio.isPlaying) {
 		stateStr = audio.isPaused ? "paused" : "playing";
 	}
 
@@ -226,8 +226,9 @@ inline void handleApiDiscsMap() {
 	if (mapDisc(uid, type, target, label)) {
 		server.send(200, "application/json", "{\"status\":\"ok\"}");
 	} else {
-		server.send(400, "application/json",
-					"{\"error\":\"invalid parameters, table full, or write failed\"}");
+		server.send(
+			400, "application/json",
+			"{\"error\":\"invalid parameters, table full, target invalid, or write failed\"}");
 	}
 }
 
@@ -242,10 +243,14 @@ inline void handleApiDiscsDelete() {
 		}
 		uid = extractJsonString(server.arg("plain"), "uid");
 	}
-	if (unmapDisc(uid)) {
+	UnmapResult res = unmapDisc(uid);
+	if (res == UnmapResult::Ok) {
 		server.send(200, "application/json", "{\"status\":\"ok\"}");
+	} else if (res == UnmapResult::NotFound) {
+		server.send(404, "application/json", "{\"error\":\"disc not found\"}");
 	} else {
-		server.send(404, "application/json", "{\"error\":\"not found\"}");
+		server.send(500, "application/json",
+					"{\"error\":\"SD storage error - disc was not removed\"}");
 	}
 }
 
@@ -433,6 +438,12 @@ inline void handleFileUploadProcess() {
 		uploadFinalPath = "";
 		uploadTempPath = "";
 
+		uint64_t freeBytes = getSdFreeBytes();
+		if (freeBytes < (uint64_t)(MAX_UPLOAD_SIZE + MIN_SD_FREE_MARGIN)) {
+			uploadAborted = true;
+			return;
+		}
+
 		String targetDir = "/";
 		if (server.hasArg("path")) {
 			String p = server.arg("path");
@@ -447,7 +458,7 @@ inline void handleFileUploadProcess() {
 		if (slashIndex != -1)
 			filename = filename.substring(slashIndex + 1);
 
-		if (!isMp3(filename)) {
+		if (!isSafeUploadFilename(filename)) {
 			uploadAborted = true;
 			return;
 		}
@@ -519,7 +530,7 @@ inline void handleFileUploadProcess() {
 inline void handleFileUploadResponse() {
 	if (uploadAborted) {
 		server.send(400, "application/json",
-					"{\"error\":\"upload failed, rejected, or exceeded limit\"}");
+					"{\"error\":\"upload failed, rejected, out of space, or exceeded limit\"}");
 	} else {
 		server.send(200, "application/json", "{\"status\":\"ok\"}");
 	}
@@ -613,7 +624,8 @@ inline void handleApiPlaylistTracksUpdate() {
 		invalidatePlaylistCache();
 		server.send(200, "application/json", "{\"status\":\"ok\"}");
 	} else {
-		server.send(500, "application/json", "{\"error\":\"write failed or invalid track list\"}");
+		server.send(400, "application/json",
+					"{\"error\":\"write failed, invalid track, or track missing\"}");
 	}
 }
 
@@ -677,7 +689,7 @@ inline void handleApiPlayerStatus() {
 	String state = "stopped";
 	if (isBluetoothActive()) {
 		state = isBluetoothConnected() ? "bluetooth_connected" : "bluetooth_pairing";
-	} else if (snap.isPlaying) {
+	} else if (snap.valid && snap.isPlaying) {
 		state = snap.isPaused ? "paused" : "playing";
 	}
 	server.send(200, "application/json",
@@ -710,7 +722,11 @@ inline void handleDynamicPlaylists() {
 				return;
 			}
 			if (renamePlaylist(id, newName)) {
-				cascadeRenamePlaylist(id, newName);
+				if (!cascadeRenamePlaylist(id, newName)) {
+					renamePlaylist(newName, id);
+					server.send(500, "application/json", "{\"error\":\"mapping cascade failed\"}");
+					return;
+				}
 				invalidatePlaylistCache();
 				server.send(200, "application/json", "{\"status\":\"ok\"}");
 			} else {

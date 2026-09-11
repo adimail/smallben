@@ -8,24 +8,28 @@ static I2SClass i2s;
 static BluetoothA2DPSink a2dp_sink(i2s);
 static bool btRunning = false;
 
-inline void initBluetooth() {
+inline bool initBluetooth() {
 	i2s.setPins(I2S_BCLK_PIN, I2S_LRC_PIN, I2S_DIN_PIN);
-	i2s.begin(I2S_MODE_STD, 44100, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO,
-			  I2S_STD_SLOT_BOTH);
+	return i2s.begin(I2S_MODE_STD, 44100, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO,
+					 I2S_STD_SLOT_BOTH);
 }
 
-inline void startBluetooth() {
+inline bool startBluetooth() {
 	if (btRunning)
-		return;
-	initBluetooth();
+		return true;
+	if (!initBluetooth()) {
+		return false;
+	}
 	a2dp_sink.start(BT_DEVICE_NAME);
 	btRunning = true;
+	return true;
 }
 
 inline void stopBluetooth() {
 	if (!btRunning)
 		return;
-	a2dp_sink.end(true);
+	a2dp_sink.end(false);
+	i2s.end();
 	btRunning = false;
 }
 

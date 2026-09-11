@@ -21,22 +21,25 @@
 
 #define MODE_SWITCH_PIN 16
 
-const char *AP_SSID = "Smallben-Setup";
-const char *AP_PASS = "smallben123";
+const char *AP_SSID = "SmallBen";
+const char *AP_PASS_DEFAULT = "smallben123";
 const uint16_t HTTP_PORT = 80;
 
 const char *BT_DEVICE_NAME = "Smallben";
 
 const size_t MAX_UPLOAD_SIZE = 31457280;
+const size_t MIN_SD_FREE_MARGIN = 2097152;
 const size_t MAX_JSON_BODY_SIZE = 16384;
 
-const char *const HIDDEN_EXACT_NAMES[] = {
-	"playlists",	"system volume information", "thumbs.db", ".ds_store", "discs.csv", "discs.tmp",
-	"discs.csv.bak"};
+const char *const HIDDEN_EXACT_NAMES[] = {"playlists",	  "system volume information",
+										  "thumbs.db",	  ".ds_store",
+										  "discs.csv",	  "discs.tmp",
+										  "discs.new",	  "discs.bak",
+										  "discs.csv.bak"};
 const size_t NUM_HIDDEN_EXACT_NAMES = sizeof(HIDDEN_EXACT_NAMES) / sizeof(HIDDEN_EXACT_NAMES[0]);
 
 const char *const HIDDEN_EXTENSIONS[] = {".m3u", ".db",	 ".dat",	   ".idx", ".bin",
-										 ".sys", ".tmp", ".uploading", ".bak"};
+										 ".sys", ".tmp", ".uploading", ".bak", ".new"};
 const size_t NUM_HIDDEN_EXTENSIONS = sizeof(HIDDEN_EXTENSIONS) / sizeof(HIDDEN_EXTENSIONS[0]);
 
 const char *const HIDDEN_PREFIXES[] = {".", "._"};
