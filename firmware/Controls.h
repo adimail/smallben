@@ -6,7 +6,6 @@
 #include "RfidEngine.h"
 #include "WifiManager.h"
 #include <Arduino.h>
-#include <math.h>
 
 enum class PlaybackMode { Disc, Bluetooth };
 
@@ -19,8 +18,7 @@ static int modeSwitchLastReading = HIGH;
 static unsigned long modeSwitchDebounceTime = 0;
 const unsigned long MODE_SWITCH_DEBOUNCE_MS = 50;
 
-static float filteredPotReading = -1.0f;
-static float lastAppliedVolume = -1.0f;
+static int lastPotVal = -100;
 static unsigned long lastPotSampleTime = 0;
 const unsigned long POT_SAMPLE_INTERVAL_MS = 50;
 
@@ -33,12 +31,13 @@ const unsigned long LONG_PRESS_DURATION_MS = 1500;
 
 inline PlaybackMode getCurrentMode() { return currentMode; }
 
-inline void applyVolume(float volume) {
+inline void applyPotVolume() {
+	int raw = analogRead(VOLUME_POT_PIN);
+	lastPotVal = raw;
 	if (currentMode == PlaybackMode::Bluetooth) {
-		uint8_t btVol = (uint8_t)(volume * 127.0f);
-		setBluetoothVolume(btVol);
+		setBluetoothVolume(raw / 32);
 	} else {
-		requestAudioVolume(volume);
+		requestAudioVolume((float)raw / 4095.0f);
 	}
 }
 
@@ -50,24 +49,8 @@ inline void handleVolume() {
 	lastPotSampleTime = now;
 
 	int raw = analogRead(VOLUME_POT_PIN);
-	if (filteredPotReading < 0.0f) {
-		filteredPotReading = (float)raw;
-	} else {
-		filteredPotReading = filteredPotReading * 0.75f + (float)raw * 0.25f;
-	}
-
-	float normalized = 0.0f;
-	if (filteredPotReading <= 50.0f) {
-		normalized = 0.0f;
-	} else if (filteredPotReading >= 4000.0f) {
-		normalized = 1.0f;
-	} else {
-		normalized = (filteredPotReading - 50.0f) / (4000.0f - 50.0f);
-	}
-
-	if (lastAppliedVolume < 0.0f || fabsf(normalized - lastAppliedVolume) >= 0.015f) {
-		lastAppliedVolume = normalized;
-		applyVolume(normalized);
+	if (abs(raw - lastPotVal) > 30) {
+		applyPotVolume();
 	}
 }
 
@@ -82,9 +65,7 @@ inline void applyMode(PlaybackMode mode) {
 			requestAudioReclaimI2SBlocking();
 			setRfidEnabled(true);
 			currentMode = PlaybackMode::Disc;
-			if (lastAppliedVolume >= 0.0f) {
-				applyVolume(lastAppliedVolume);
-			}
+			applyPotVolume();
 			return;
 		}
 		currentMode = PlaybackMode::Bluetooth;
@@ -95,9 +76,7 @@ inline void applyMode(PlaybackMode mode) {
 		setRfidEnabled(true);
 		currentMode = PlaybackMode::Disc;
 	}
-	if (lastAppliedVolume >= 0.0f) {
-		applyVolume(lastAppliedVolume);
-	}
+	applyPotVolume();
 }
 
 inline void handleModeSwitch() {
@@ -186,11 +165,6 @@ inline void initControls() {
 
 	btnState = ButtonMachineState::Idle;
 	btnLongPressFired = false;
-
-	for (int i = 0; i < 5; i++) {
-		handleVolume();
-		delay(10);
-	}
 
 	int initialModeReading = digitalRead(MODE_SWITCH_PIN);
 	modeSwitchState = initialModeReading;
