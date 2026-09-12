@@ -36,3 +36,20 @@ inline void stopBluetooth() {
 inline bool isBluetoothActive() { return btRunning; }
 
 inline bool isBluetoothConnected() { return btRunning && a2dp_sink.is_connected(); }
+
+inline void setBluetoothVolume(uint8_t volume) {
+	if (btRunning) {
+		a2dp_sink.set_volume(volume);
+	}
+}
+
+inline void toggleBluetoothPlayback() {
+	if (!btRunning || !a2dp_sink.is_connected()) {
+		return;
+	}
+	if (a2dp_sink.get_audio_state() == ESP_A2D_AUDIO_STATE_STARTED) {
+		a2dp_sink.pause();
+	} else {
+		a2dp_sink.play();
+	}
+}

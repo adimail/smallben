@@ -20,6 +20,7 @@
 #define WIFI_LED_PIN 33
 
 #define MODE_SWITCH_PIN 16
+#define VOLUME_POT_PIN 34
 
 const char *AP_SSID = "SmallBen";
 const char *AP_PASS_DEFAULT = "smallben123";
@@ -46,9 +47,10 @@ const char *const HIDDEN_PREFIXES[] = {".", "._"};
 const size_t NUM_HIDDEN_PREFIXES = sizeof(HIDDEN_PREFIXES) / sizeof(HIDDEN_PREFIXES[0]);
 
 const uint32_t AUDIO_TASK_STACK_SIZE = 8192;
-const UBaseType_t AUDIO_TASK_PRIORITY = 3;
-const BaseType_t AUDIO_TASK_CORE = 0;
+const UBaseType_t AUDIO_TASK_PRIORITY = 4;
+const BaseType_t AUDIO_TASK_CORE = 1;
 const TickType_t AUDIO_TASK_DELAY_TICKS = 1;
+const int I2S_DMA_BUFFER_COUNT = 32;
 
 const size_t MAX_TRACKS_CACHE = 512;
 const size_t MAX_PLAYLISTS_CACHE = 64;

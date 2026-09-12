@@ -10,12 +10,14 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
+#include <vector>
 
-enum class AudioCmdType { Play, Stop, Toggle, ReleaseI2S, ReclaimI2S };
+enum class AudioCmdType { Play, PlayPlaylist, Stop, Toggle, ReleaseI2S, ReclaimI2S, SetVolume };
 
 struct AudioCommand {
 	AudioCmdType type;
 	char path[128];
+	float gain;
 };
 
 struct AudioStateSnapshot {
@@ -32,6 +34,12 @@ static AudioOutputI2S *audioOut = nullptr;
 static bool audioIsPlaying = false;
 static bool audioIsPaused = false;
 static char audioCurrentPathBuf[128] = {0};
+static float currentAudioGain = 0.85f;
+
+static bool audioIsPlaylist = false;
+static char audioCurrentPlaylistName[64] = {0};
+static size_t audioCurrentPlaylistIndex = 0;
+static char audioCurrentTrack[128] = {0};
 
 static SemaphoreHandle_t audioStateMutex = nullptr;
 static SemaphoreHandle_t audioSyncSem = nullptr;
@@ -106,7 +114,7 @@ inline bool isAudioPathActive(const String &targetPath) {
 	return false;
 }
 
-inline void stopAudioInternal() {
+inline void stopPlaybackInternal() {
 	if (audioMp3) {
 		if (audioMp3->isRunning()) {
 			SdGuard sdGuard;
@@ -128,6 +136,14 @@ inline void stopAudioInternal() {
 	clearAudioPathReserved();
 }
 
+inline void stopAudioInternal() {
+	stopPlaybackInternal();
+	audioIsPlaylist = false;
+	audioCurrentPlaylistName[0] = '\0';
+	audioCurrentPlaylistIndex = 0;
+	audioCurrentTrack[0] = '\0';
+}
+
 inline void releaseAudioI2SInternal() {
 	stopAudioInternal();
 	if (audioOut) {
@@ -138,18 +154,18 @@ inline void releaseAudioI2SInternal() {
 
 inline bool reclaimAudioI2SInternal() {
 	if (!audioOut) {
-		audioOut = new AudioOutputI2S();
+		audioOut = new AudioOutputI2S(0, 0, I2S_DMA_BUFFER_COUNT);
 		if (!audioOut) {
 			return false;
 		}
 		audioOut->SetPinout(I2S_BCLK_PIN, I2S_LRC_PIN, I2S_DIN_PIN);
-		audioOut->SetGain(0.85);
+		audioOut->SetGain(currentAudioGain);
 	}
 	return true;
 }
 
 inline bool startTrackInternal(const char *path) {
-	stopAudioInternal();
+	stopPlaybackInternal();
 	if (!audioOut) {
 		return false;
 	}
@@ -191,9 +207,73 @@ inline bool startTrackInternal(const char *path) {
 		return false;
 	}
 
+	strncpy(audioCurrentTrack, path, sizeof(audioCurrentTrack) - 1);
+	audioCurrentTrack[sizeof(audioCurrentTrack) - 1] = '\0';
 	updateAudioState(true, false, path);
 	clearAudioPathReserved();
 	return true;
+}
+
+inline bool startPlaylistInternal(const char *name) {
+	stopAudioInternal();
+	if (!name || strlen(name) == 0) {
+		return false;
+	}
+	String pName(name);
+	if (!isSafePlaylistName(pName)) {
+		return false;
+	}
+	std::vector<String> tracks = getPlaylistTrackList(pName);
+	if (tracks.empty()) {
+		return false;
+	}
+	audioIsPlaylist = true;
+	strncpy(audioCurrentPlaylistName, name, sizeof(audioCurrentPlaylistName) - 1);
+	audioCurrentPlaylistName[sizeof(audioCurrentPlaylistName) - 1] = '\0';
+	audioCurrentPlaylistIndex = 0;
+
+	size_t attempts = 0;
+	while (attempts < tracks.size()) {
+		String trackPath = tracks[audioCurrentPlaylistIndex];
+		if (startTrackInternal(trackPath.c_str())) {
+			return true;
+		}
+		audioCurrentPlaylistIndex = (audioCurrentPlaylistIndex + 1) % tracks.size();
+		attempts++;
+	}
+	stopAudioInternal();
+	return false;
+}
+
+inline void onTrackFinishedInternal() {
+	if (audioIsPlaylist && strlen(audioCurrentPlaylistName) > 0) {
+		std::vector<String> tracks = getPlaylistTrackList(audioCurrentPlaylistName);
+		if (tracks.empty()) {
+			stopAudioInternal();
+			return;
+		}
+		audioCurrentPlaylistIndex = (audioCurrentPlaylistIndex + 1) % tracks.size();
+		size_t attempts = 0;
+		bool started = false;
+		while (attempts < tracks.size()) {
+			String nextTrack = tracks[audioCurrentPlaylistIndex];
+			if (startTrackInternal(nextTrack.c_str())) {
+				started = true;
+				break;
+			}
+			audioCurrentPlaylistIndex = (audioCurrentPlaylistIndex + 1) % tracks.size();
+			attempts++;
+		}
+		if (!started) {
+			stopAudioInternal();
+		}
+	} else if (strlen(audioCurrentTrack) > 0) {
+		if (!startTrackInternal(audioCurrentTrack)) {
+			stopAudioInternal();
+		}
+	} else {
+		stopAudioInternal();
+	}
 }
 
 inline void togglePlayInternal(const char *path) {
@@ -201,21 +281,41 @@ inline void togglePlayInternal(const char *path) {
 		return;
 	}
 	AudioStateSnapshot snap = getAudioSnapshot();
-	if (snap.valid && snap.isPlaying && strcmp(snap.path, path) == 0) {
+	if (!snap.valid) {
+		return;
+	}
+	if (path && strlen(path) > 0) {
+		if (snap.isPlaying && strcmp(snap.path, path) == 0) {
+			bool newPaused = !snap.isPaused;
+			if (newPaused) {
+				audioOut->stop();
+			} else {
+				if (!audioOut->begin()) {
+					stopAudioInternal();
+					return;
+				}
+			}
+			updateAudioState(true, newPaused, snap.path);
+			return;
+		}
+		audioIsPlaylist = false;
+		audioCurrentPlaylistName[0] = '\0';
+		audioCurrentPlaylistIndex = 0;
+		startTrackInternal(path);
+		return;
+	}
+	if (snap.isPlaying) {
 		bool newPaused = !snap.isPaused;
 		if (newPaused) {
-			if (audioOut)
-				audioOut->stop();
+			audioOut->stop();
 		} else {
-			if (audioOut && !audioOut->begin()) {
+			if (!audioOut->begin()) {
 				stopAudioInternal();
 				return;
 			}
 		}
 		updateAudioState(true, newPaused, snap.path);
-		return;
 	}
-	startTrackInternal(path);
 }
 
 inline void handleAudioInternal() {
@@ -227,7 +327,7 @@ inline void handleAudioInternal() {
 			ok = audioMp3->loop();
 		}
 		if (!ok) {
-			stopAudioInternal();
+			onTrackFinishedInternal();
 		}
 	}
 }
@@ -241,7 +341,13 @@ inline void audioTaskLoop(void *param) {
 			audioTaskHeartbeat = millis();
 			switch (cmd.type) {
 			case AudioCmdType::Play:
+				audioIsPlaylist = false;
+				audioCurrentPlaylistName[0] = '\0';
+				audioCurrentPlaylistIndex = 0;
 				startTrackInternal(cmd.path);
+				break;
+			case AudioCmdType::PlayPlaylist:
+				startPlaylistInternal(cmd.path);
 				break;
 			case AudioCmdType::Stop:
 				stopAudioInternal();
@@ -265,6 +371,12 @@ inline void audioTaskLoop(void *param) {
 					xSemaphoreGive(audioSyncSem);
 				}
 				break;
+			case AudioCmdType::SetVolume:
+				currentAudioGain = cmd.gain;
+				if (audioOut) {
+					audioOut->SetGain(currentAudioGain);
+				}
+				break;
 			}
 		}
 		handleAudioInternal();
@@ -277,9 +389,21 @@ inline bool requestAudioPlay(const String &path) {
 		return false;
 	AudioCommand cmd;
 	cmd.type = AudioCmdType::Play;
+	cmd.gain = 0.0f;
 	strncpy(cmd.path, path.c_str(), sizeof(cmd.path) - 1);
 	cmd.path[sizeof(cmd.path) - 1] = '\0';
-	return (xQueueSend(audioCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE);
+	return (xQueueSend(audioCommandQueue, &cmd, pdMS_TO_TICKS(150)) == pdTRUE);
+}
+
+inline bool requestAudioPlayPlaylist(const String &name) {
+	if (!audioCommandQueue || !isAudioTaskAlive() || !isSafePlaylistName(name))
+		return false;
+	AudioCommand cmd;
+	cmd.type = AudioCmdType::PlayPlaylist;
+	cmd.gain = 0.0f;
+	strncpy(cmd.path, name.c_str(), sizeof(cmd.path) - 1);
+	cmd.path[sizeof(cmd.path) - 1] = '\0';
+	return (xQueueSend(audioCommandQueue, &cmd, pdMS_TO_TICKS(150)) == pdTRUE);
 }
 
 inline bool requestAudioStop() {
@@ -288,17 +412,35 @@ inline bool requestAudioStop() {
 	AudioCommand cmd;
 	cmd.type = AudioCmdType::Stop;
 	cmd.path[0] = '\0';
-	return (xQueueSend(audioCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE);
+	cmd.gain = 0.0f;
+	return (xQueueSend(audioCommandQueue, &cmd, pdMS_TO_TICKS(150)) == pdTRUE);
 }
 
-inline bool requestAudioToggle(const String &path) {
-	if (!audioCommandQueue || !isAudioTaskAlive() || !isSafePath(path) || !isMp3(path))
+inline bool requestAudioToggle(const String &path = "") {
+	if (!audioCommandQueue || !isAudioTaskAlive())
+		return false;
+	if (path.length() > 0 && (!isSafePath(path) || !isMp3(path)))
 		return false;
 	AudioCommand cmd;
 	cmd.type = AudioCmdType::Toggle;
-	strncpy(cmd.path, path.c_str(), sizeof(cmd.path) - 1);
-	cmd.path[sizeof(cmd.path) - 1] = '\0';
-	return (xQueueSend(audioCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE);
+	cmd.gain = 0.0f;
+	if (path.length() > 0) {
+		strncpy(cmd.path, path.c_str(), sizeof(cmd.path) - 1);
+		cmd.path[sizeof(cmd.path) - 1] = '\0';
+	} else {
+		cmd.path[0] = '\0';
+	}
+	return (xQueueSend(audioCommandQueue, &cmd, pdMS_TO_TICKS(150)) == pdTRUE);
+}
+
+inline bool requestAudioVolume(float gain) {
+	if (!audioCommandQueue || !isAudioTaskAlive())
+		return false;
+	AudioCommand cmd;
+	cmd.type = AudioCmdType::SetVolume;
+	cmd.path[0] = '\0';
+	cmd.gain = gain;
+	return (xQueueSend(audioCommandQueue, &cmd, pdMS_TO_TICKS(50)) == pdTRUE);
 }
 
 inline bool requestAudioReleaseI2SBlocking() {
@@ -309,6 +451,7 @@ inline bool requestAudioReleaseI2SBlocking() {
 	AudioCommand cmd;
 	cmd.type = AudioCmdType::ReleaseI2S;
 	cmd.path[0] = '\0';
+	cmd.gain = 0.0f;
 	if (xQueueSend(audioCommandQueue, &cmd, pdMS_TO_TICKS(200)) != pdTRUE) {
 		return false;
 	}
@@ -323,6 +466,7 @@ inline bool requestAudioReclaimI2SBlocking() {
 	AudioCommand cmd;
 	cmd.type = AudioCmdType::ReclaimI2S;
 	cmd.path[0] = '\0';
+	cmd.gain = 0.0f;
 	if (xQueueSend(audioCommandQueue, &cmd, pdMS_TO_TICKS(200)) != pdTRUE) {
 		return false;
 	}

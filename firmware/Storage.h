@@ -602,6 +602,24 @@ template <typename Callback> inline bool iteratePlaylistTracks(const String &nam
 	return true;
 }
 
+inline std::vector<String> getPlaylistTrackList(const String &name) {
+	String path = getPlaylistPath(name);
+	std::vector<String> lines;
+	SdGuard guard;
+	File f = SD.open(path, FILE_READ);
+	if (!f)
+		return lines;
+	while (f.available()) {
+		String trackPath = f.readStringUntil('\n');
+		trackPath.trim();
+		if (trackPath.length() > 0 && !trackPath.startsWith("#")) {
+			lines.push_back(trackPath);
+		}
+	}
+	f.close();
+	return lines;
+}
+
 inline String getPlaylistFirstTrack(const String &name) {
 	String path = getPlaylistPath(name);
 	SdGuard guard;

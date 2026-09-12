@@ -204,8 +204,7 @@ inline bool mapDisc(const String &rawUid, const String &rawType, const String &r
 				g_rfidAudioPlaying = true;
 			}
 		} else if (type == "playlist") {
-			String first = getPlaylistFirstTrack(target);
-			if (first.length() > 0 && requestAudioPlay(first)) {
+			if (requestAudioPlayPlaylist(target)) {
 				RfidGuard rGuard;
 				g_rfidAudioPlaying = true;
 			}
@@ -408,8 +407,7 @@ inline void handleRfidPoll() {
 						g_rfidAudioPlaying = true;
 					}
 				} else if (mapping.type == "playlist") {
-					String first = getPlaylistFirstTrack(mapping.target);
-					if (first.length() > 0 && requestAudioPlay(first)) {
+					if (requestAudioPlayPlaylist(mapping.target)) {
 						RfidGuard rGuard;
 						g_rfidAudioPlaying = true;
 					}
