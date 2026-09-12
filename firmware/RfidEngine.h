@@ -118,10 +118,10 @@ inline void loadDiscMappings() {
 		}
 	}
 	RfidGuard rGuard;
-	g_discMappings = loaded;
+	g_discMappings = std::move(loaded);
 }
 
-inline bool saveDiscMappingsFile(const std::map<String, DiscMapping> &mappings) {
+inline bool saveDiscMappingsFile() {
 	if (!isSdReady()) {
 		return false;
 	}
@@ -133,7 +133,7 @@ inline bool saveDiscMappingsFile(const std::map<String, DiscMapping> &mappings) 
 	if (!f) {
 		return false;
 	}
-	for (const auto &pair : mappings) {
+	for (const auto &pair : g_discMappings) {
 		f.println(pair.second.uid + "|" + pair.second.type + "|" + pair.second.target + "|" +
 				  pair.second.label);
 	}
@@ -169,22 +169,12 @@ inline bool mapDisc(const String &rawUid, const String &rawType, const String &r
 		}
 	}
 
-	std::map<String, DiscMapping> updated;
 	{
 		RfidGuard rGuard;
-		if (g_discMappings.find(uid) == g_discMappings.end() &&
-			g_discMappings.size() >= MAX_DISCS_MAPPINGS) {
+		g_discMappings[uid] = {uid, type, target, label.length() > 0 ? label : target};
+		if (!saveDiscMappingsFile()) {
 			return false;
 		}
-		updated = g_discMappings;
-		updated[uid] = {uid, type, target, label.length() > 0 ? label : target};
-	}
-	if (!saveDiscMappingsFile(updated)) {
-		return false;
-	}
-	{
-		RfidGuard rGuard;
-		g_discMappings = updated;
 	}
 
 	bool shouldPlayNow = false;
@@ -220,21 +210,14 @@ inline UnmapResult unmapDisc(const String &rawUid) {
 	}
 
 	String uid = sanitizeField(rawUid);
-	std::map<String, DiscMapping> updated;
-	{
-		RfidGuard rGuard;
-		if (g_discMappings.find(uid) == g_discMappings.end()) {
-			return UnmapResult::NotFound;
-		}
-		updated = g_discMappings;
-		updated.erase(uid);
+	RfidGuard rGuard;
+	auto it = g_discMappings.find(uid);
+	if (it == g_discMappings.end()) {
+		return UnmapResult::NotFound;
 	}
-	if (!saveDiscMappingsFile(updated)) {
+	g_discMappings.erase(it);
+	if (!saveDiscMappingsFile()) {
 		return UnmapResult::StorageError;
-	}
-	{
-		RfidGuard rGuard;
-		g_discMappings = updated;
 	}
 	return UnmapResult::Ok;
 }
@@ -243,61 +226,39 @@ inline bool cascadeRenamePlaylist(const String &oldName, const String &newName) 
 	if (!isSdReady()) {
 		return false;
 	}
-	std::map<String, DiscMapping> updated;
+	RfidGuard rGuard;
 	bool changed = false;
-	{
-		RfidGuard rGuard;
-		updated = g_discMappings;
-		for (auto &pair : updated) {
-			if (pair.second.type == "playlist" && pair.second.target == oldName) {
-				pair.second.target = newName;
-				if (pair.second.label == oldName) {
-					pair.second.label = newName;
-				}
-				changed = true;
+	for (auto &pair : g_discMappings) {
+		if (pair.second.type == "playlist" && pair.second.target == oldName) {
+			pair.second.target = newName;
+			if (pair.second.label == oldName) {
+				pair.second.label = newName;
 			}
+			changed = true;
 		}
 	}
 	if (!changed)
 		return true;
-	if (!saveDiscMappingsFile(updated)) {
-		return false;
-	}
-	{
-		RfidGuard rGuard;
-		g_discMappings = updated;
-	}
-	return true;
+	return saveDiscMappingsFile();
 }
 
 inline bool cascadeDeletePlaylist(const String &name) {
 	if (!isSdReady()) {
 		return false;
 	}
-	std::map<String, DiscMapping> updated;
+	RfidGuard rGuard;
 	bool changed = false;
-	{
-		RfidGuard rGuard;
-		updated = g_discMappings;
-		for (auto it = updated.begin(); it != updated.end();) {
-			if (it->second.type == "playlist" && it->second.target == name) {
-				it = updated.erase(it);
-				changed = true;
-			} else {
-				++it;
-			}
+	for (auto it = g_discMappings.begin(); it != g_discMappings.end();) {
+		if (it->second.type == "playlist" && it->second.target == name) {
+			it = g_discMappings.erase(it);
+			changed = true;
+		} else {
+			++it;
 		}
 	}
 	if (!changed)
 		return true;
-	if (!saveDiscMappingsFile(updated)) {
-		return false;
-	}
-	{
-		RfidGuard rGuard;
-		g_discMappings = updated;
-	}
-	return true;
+	return saveDiscMappingsFile();
 }
 
 inline std::vector<DiscMapping> getDiscMappingsSnapshot() {
@@ -460,7 +421,7 @@ inline bool initRfid() {
 inline bool startRfidTask() {
 	if (!rfidTaskHandle) {
 		BaseType_t res =
-			xTaskCreatePinnedToCore(rfidTaskLoop, "rfidTask", 4096, nullptr, 2, &rfidTaskHandle, 1);
+			xTaskCreatePinnedToCore(rfidTaskLoop, "rfidTask", 3072, nullptr, 2, &rfidTaskHandle, 1);
 		return (res == pdPASS);
 	}
 	return true;

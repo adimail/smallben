@@ -46,13 +46,10 @@ const size_t NUM_HIDDEN_EXTENSIONS = sizeof(HIDDEN_EXTENSIONS) / sizeof(HIDDEN_E
 const char *const HIDDEN_PREFIXES[] = {".", "._"};
 const size_t NUM_HIDDEN_PREFIXES = sizeof(HIDDEN_PREFIXES) / sizeof(HIDDEN_PREFIXES[0]);
 
-const uint32_t AUDIO_TASK_STACK_SIZE = 8192;
+const uint32_t AUDIO_TASK_STACK_SIZE = 4096;
 const UBaseType_t AUDIO_TASK_PRIORITY = 4;
 const BaseType_t AUDIO_TASK_CORE = 1;
 const TickType_t AUDIO_TASK_DELAY_TICKS = 1;
-const int I2S_DMA_BUFFER_COUNT = 32;
+const int I2S_DMA_BUFFER_COUNT = 8;
 
-const size_t MAX_TRACKS_CACHE = 512;
-const size_t MAX_PLAYLISTS_CACHE = 64;
 const size_t MAX_PLAYLIST_TRACKS = 128;
-const size_t MAX_DISCS_MAPPINGS = 128;

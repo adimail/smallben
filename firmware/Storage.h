@@ -5,7 +5,6 @@
 #include <SPI.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
-#include <map>
 #include <vector>
 
 enum class SdStorageState { Ready, Busy, Error };
@@ -44,28 +43,6 @@ class SdGuard {
 	SdGuard(const SdGuard &) = delete;
 	SdGuard &operator=(const SdGuard &) = delete;
 };
-
-struct TrackInfo {
-	String name;
-	String path;
-	size_t size;
-};
-
-struct PlaylistInfo {
-	String name;
-	int trackCount;
-};
-
-static std::vector<TrackInfo> g_trackCache;
-static bool g_trackCacheValid = false;
-
-static std::vector<PlaylistInfo> g_playlistCache;
-static bool g_playlistCacheValid = false;
-
-static std::map<String, std::vector<String>> g_trackPlaylistIndex;
-
-inline void invalidateTrackCache() { g_trackCacheValid = false; }
-inline void invalidatePlaylistCache() { g_playlistCacheValid = false; }
 
 inline SdStorageState getSdStorageState() { return g_sdStorageState; }
 inline void setSdStorageState(SdStorageState state) { g_sdStorageState = state; }
@@ -441,140 +418,6 @@ template <typename Callback> inline void iterateDirectory(File dir, Callback cb)
 	}
 }
 
-inline void rebuildTrackCacheIfNeeded() {
-	if (g_trackCacheValid || !isSdReady())
-		return;
-
-	std::vector<TrackInfo> fresh;
-	fresh.reserve(64);
-	std::vector<String> dirsToScan;
-	dirsToScan.push_back("/");
-
-	while (!dirsToScan.empty() && fresh.size() < MAX_TRACKS_CACHE) {
-		String currentDir = dirsToScan.back();
-		dirsToScan.pop_back();
-
-		std::vector<String> localSubDirs;
-		std::vector<TrackInfo> localTracks;
-
-		{
-			SdGuard guard;
-			File dir = SD.open(currentDir);
-			if (dir && dir.isDirectory()) {
-				while (true) {
-					File entry = dir.openNextFile();
-					if (!entry)
-						break;
-					String name = entry.name();
-					if (!isJunk(name)) {
-						String fullPath = (currentDir == "/" ? "" : currentDir) + "/" + name;
-						if (entry.isDirectory()) {
-							localSubDirs.push_back(fullPath);
-						} else if (isMp3(name)) {
-							localTracks.push_back({name, fullPath, entry.size()});
-						}
-					}
-					entry.close();
-				}
-				dir.close();
-			}
-		}
-
-		for (const auto &t : localTracks) {
-			if (fresh.size() < MAX_TRACKS_CACHE) {
-				fresh.push_back(t);
-			}
-		}
-		for (const auto &sd : localSubDirs) {
-			dirsToScan.push_back(sd);
-		}
-
-		vTaskDelay(pdMS_TO_TICKS(2));
-	}
-
-	g_trackCache = fresh;
-	g_trackCacheValid = true;
-}
-
-inline bool getCachedTrackSize(const String &path, size_t &sizeOut) {
-	rebuildTrackCacheIfNeeded();
-	for (const auto &t : g_trackCache) {
-		if (t.path == path) {
-			sizeOut = t.size;
-			return true;
-		}
-	}
-	return false;
-}
-
-inline void rebuildPlaylistCacheIfNeeded() {
-	if (g_playlistCacheValid || !isSdReady())
-		return;
-
-	std::vector<String> playlistFiles;
-	{
-		SdGuard guard;
-		File dir = SD.open("/playlists");
-		if (dir && dir.isDirectory()) {
-			while (true) {
-				File entry = dir.openNextFile();
-				if (!entry)
-					break;
-				String name = entry.name();
-				String lower = name;
-				lower.toLowerCase();
-				if (!entry.isDirectory() && lower.endsWith(".m3u") && !name.startsWith(".") &&
-					!name.startsWith("._")) {
-					if (playlistFiles.size() < MAX_PLAYLISTS_CACHE) {
-						playlistFiles.push_back(name);
-					}
-				}
-				entry.close();
-			}
-			dir.close();
-		}
-	}
-
-	std::vector<PlaylistInfo> freshPlaylists;
-	std::map<String, std::vector<String>> freshIndex;
-
-	for (const String &name : playlistFiles) {
-		String fullPath = "/playlists/" + name;
-		String base = name;
-		base.replace(".m3u", "");
-		int count = 0;
-		std::vector<String> lines;
-
-		{
-			SdGuard guard;
-			File f = SD.open(fullPath, FILE_READ);
-			if (f) {
-				while (f.available()) {
-					String line = f.readStringUntil('\n');
-					line.trim();
-					if (line.length() > 0 && !line.startsWith("#")) {
-						lines.push_back(line);
-					}
-				}
-				f.close();
-			}
-		}
-
-		count = (int)lines.size();
-		for (const String &line : lines) {
-			if (freshIndex[line].size() < 16) {
-				freshIndex[line].push_back(base);
-			}
-		}
-		freshPlaylists.push_back({name, count});
-		vTaskDelay(pdMS_TO_TICKS(2));
-	}
-
-	g_playlistCache = freshPlaylists;
-	g_trackPlaylistIndex = freshIndex;
-	g_playlistCacheValid = true;
-}
-
 template <typename Callback> inline bool iteratePlaylistTracks(const String &name, Callback cb) {
 	String path = getPlaylistPath(name);
 	std::vector<String> lines;
@@ -596,7 +439,18 @@ template <typename Callback> inline bool iteratePlaylistTracks(const String &nam
 		int lastSlash = trackPath.lastIndexOf('/');
 		String trackName = (lastSlash != -1) ? trackPath.substring(lastSlash + 1) : trackPath;
 		size_t sz = 0;
-		bool exists = getCachedTrackSize(trackPath, sz);
+		bool exists = false;
+		{
+			SdGuard guard;
+			if (SD.exists(trackPath)) {
+				File tf = SD.open(trackPath, FILE_READ);
+				if (tf) {
+					sz = tf.size();
+					exists = true;
+					tf.close();
+				}
+			}
+		}
 		cb(trackName, trackPath, sz, exists);
 	}
 	return true;

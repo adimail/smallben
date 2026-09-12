@@ -255,18 +255,56 @@ inline void handleApiDiscsDelete() {
 }
 
 inline void handleApiMp3() {
-	rebuildTrackCacheIfNeeded();
+	if (!isSdReady()) {
+		server.send(500, "application/json", "[]");
+		return;
+	}
 	server.setContentLength(CONTENT_LENGTH_UNKNOWN);
 	server.send(200, "application/json", "");
 	server.sendContent("[");
 	bool first = true;
-	for (const auto &t : g_trackCache) {
-		if (!first)
-			server.sendContent(",");
-		first = false;
-		server.sendContent("{\"name\":\"" + jsonEscape(t.name) + "\",\"path\":\"" +
-						   jsonEscape(t.path) + "\",\"size\":" + String(t.size) + "}");
+	std::vector<String> dirs;
+	dirs.push_back("/");
+
+	while (!dirs.empty()) {
+		String currentDir = dirs.back();
+		dirs.pop_back();
+
+		std::vector<String> subDirs;
+		{
+			SdGuard guard;
+			File dir = SD.open(currentDir);
+			if (dir && dir.isDirectory()) {
+				while (true) {
+					File entry = dir.openNextFile();
+					if (!entry)
+						break;
+					String name = entry.name();
+					if (!isJunk(name)) {
+						String fullPath = (currentDir == "/" ? "" : currentDir) + "/" + name;
+						if (entry.isDirectory()) {
+							subDirs.push_back(fullPath);
+						} else if (isMp3(name)) {
+							size_t sz = entry.size();
+							if (!first)
+								server.sendContent(",");
+							first = false;
+							server.sendContent("{\"name\":\"" + jsonEscape(name) +
+											   "\",\"path\":\"" + jsonEscape(fullPath) +
+											   "\",\"size\":" + String(sz) + "}");
+						}
+					}
+					entry.close();
+				}
+				dir.close();
+			}
+		}
+		for (const auto &sd : subDirs) {
+			dirs.push_back(sd);
+		}
+		vTaskDelay(pdMS_TO_TICKS(1));
 	}
+
 	server.sendContent("]");
 	server.sendContent("");
 }
@@ -281,20 +319,65 @@ inline void handleApiTrackPlaylists() {
 		server.send(400, "application/json", "{\"error\":\"invalid path\"}");
 		return;
 	}
-	rebuildPlaylistCacheIfNeeded();
 	server.setContentLength(CONTENT_LENGTH_UNKNOWN);
 	server.send(200, "application/json", "");
 	server.sendContent("[");
 	bool first = true;
-	auto it = g_trackPlaylistIndex.find(path);
-	if (it != g_trackPlaylistIndex.end()) {
-		for (const String &name : it->second) {
-			if (!first)
-				server.sendContent(",");
-			first = false;
-			server.sendContent("\"" + jsonEscape(name) + "\"");
+
+	if (isSdReady()) {
+		std::vector<String> playlistNames;
+		{
+			SdGuard guard;
+			File dir = SD.open("/playlists");
+			if (dir && dir.isDirectory()) {
+				while (true) {
+					File entry = dir.openNextFile();
+					if (!entry)
+						break;
+					String name = entry.name();
+					String lower = name;
+					lower.toLowerCase();
+					if (!entry.isDirectory() && lower.endsWith(".m3u") && !name.startsWith(".") &&
+						!name.startsWith("._")) {
+						playlistNames.push_back(name);
+					}
+					entry.close();
+				}
+				dir.close();
+			}
+		}
+
+		for (const String &pName : playlistNames) {
+			String fullPath = "/playlists/" + pName;
+			bool found = false;
+			{
+				SdGuard guard;
+				File f = SD.open(fullPath, FILE_READ);
+				if (f) {
+					while (f.available()) {
+						String line = f.readStringUntil('\n');
+						line.trim();
+						if (line == path) {
+							found = true;
+							break;
+						}
+					}
+					f.close();
+				}
+			}
+			if (found) {
+				String base = pName;
+				if (base.endsWith(".m3u")) {
+					base = base.substring(0, base.length() - 4);
+				}
+				if (!first)
+					server.sendContent(",");
+				first = false;
+				server.sendContent("\"" + jsonEscape(base) + "\"");
+			}
 		}
 	}
+
 	server.sendContent("]");
 	server.sendContent("");
 }
@@ -355,8 +438,6 @@ inline void handleApiDelete() {
 	}
 	String path = server.arg("path");
 	if (deleteStoragePath(path)) {
-		invalidateTrackCache();
-		invalidatePlaylistCache();
 		server.send(200, "application/json", "{\"status\":\"ok\"}");
 	} else {
 		server.send(403, "application/json",
@@ -511,7 +592,6 @@ inline void handleFileUploadProcess() {
 			if (canMutateStoragePathUnderGuard(uploadFinalPath) &&
 				atomicReplaceFile(uploadTempPath, uploadFinalPath)) {
 				refreshSdStatsDirect();
-				invalidateTrackCache();
 			} else {
 				uploadAborted = true;
 				if (SD.exists(uploadTempPath)) {
@@ -537,17 +617,57 @@ inline void handleFileUploadResponse() {
 }
 
 inline void handleApiPlaylistsGet() {
-	rebuildPlaylistCacheIfNeeded();
+	if (!isSdReady()) {
+		server.send(500, "application/json", "[]");
+		return;
+	}
+	std::vector<String> playlistNames;
+	{
+		SdGuard guard;
+		File dir = SD.open("/playlists");
+		if (dir && dir.isDirectory()) {
+			while (true) {
+				File entry = dir.openNextFile();
+				if (!entry)
+					break;
+				String name = entry.name();
+				String lower = name;
+				lower.toLowerCase();
+				if (!entry.isDirectory() && lower.endsWith(".m3u") && !name.startsWith(".") &&
+					!name.startsWith("._")) {
+					playlistNames.push_back(name);
+				}
+				entry.close();
+			}
+			dir.close();
+		}
+	}
 	server.setContentLength(CONTENT_LENGTH_UNKNOWN);
 	server.send(200, "application/json", "");
 	server.sendContent("[");
 	bool first = true;
-	for (const auto &p : g_playlistCache) {
+	for (const String &name : playlistNames) {
+		String fullPath = "/playlists/" + name;
+		int count = 0;
+		{
+			SdGuard guard;
+			File f = SD.open(fullPath, FILE_READ);
+			if (f) {
+				while (f.available()) {
+					String line = f.readStringUntil('\n');
+					line.trim();
+					if (line.length() > 0 && !line.startsWith("#")) {
+						count++;
+					}
+				}
+				f.close();
+			}
+		}
 		if (!first)
 			server.sendContent(",");
 		first = false;
-		server.sendContent("{\"name\":\"" + jsonEscape(p.name) +
-						   "\",\"trackCount\":" + String(p.trackCount) + "}");
+		server.sendContent("{\"name\":\"" + jsonEscape(name) +
+						   "\",\"trackCount\":" + String(count) + "}");
 	}
 	server.sendContent("]");
 	server.sendContent("");
@@ -565,7 +685,6 @@ inline void handleApiPlaylistsPost() {
 		return;
 	}
 	if (createPlaylist(name)) {
-		invalidatePlaylistCache();
 		server.send(200, "application/json", "{\"status\":\"ok\"}");
 	} else {
 		server.send(409, "application/json", "{\"error\":\"already exists or write failed\"}");
@@ -621,7 +740,6 @@ inline void handleApiPlaylistTracksUpdate() {
 	String body = server.arg("plain");
 	std::vector<String> tracks = extractJsonArray(body, "tracks");
 	if (overwritePlaylistTracks(id, tracks)) {
-		invalidatePlaylistCache();
 		server.send(200, "application/json", "{\"status\":\"ok\"}");
 	} else {
 		server.send(400, "application/json",
@@ -650,7 +768,6 @@ inline void handleApiPlaylistTracksAppend() {
 		return;
 	}
 	if (appendPlaylistTrack(id, path)) {
-		invalidatePlaylistCache();
 		server.send(200, "application/json", "{\"status\":\"ok\"}");
 	} else {
 		server.send(500, "application/json",
@@ -727,7 +844,6 @@ inline void handleDynamicPlaylists() {
 					server.send(500, "application/json", "{\"error\":\"mapping cascade failed\"}");
 					return;
 				}
-				invalidatePlaylistCache();
 				server.send(200, "application/json", "{\"status\":\"ok\"}");
 			} else {
 				server.send(500, "application/json", "{\"error\":\"rename failed\"}");
@@ -737,7 +853,6 @@ inline void handleDynamicPlaylists() {
 		if (method == HTTP_DELETE) {
 			if (deletePlaylist(id)) {
 				cascadeDeletePlaylist(id);
-				invalidatePlaylistCache();
 				server.send(200, "application/json", "{\"status\":\"ok\"}");
 			} else {
 				server.send(500, "application/json", "{\"error\":\"delete failed\"}");
