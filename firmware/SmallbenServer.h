@@ -14,6 +14,7 @@ WebServer server(HTTP_PORT);
 
 static File uploadFile;
 static bool uploadAborted = false;
+static String uploadError = "";
 static size_t uploadBytesWritten = 0;
 static String uploadFinalPath = "";
 static String uploadTempPath = "";
@@ -144,7 +145,7 @@ inline std::vector<String> extractJsonArray(const String &json, const String &ke
 	return res;
 }
 
-inline void handleRoot() { server.send_P(200, "text/html", DASHBOARD_HTML); }
+inline void handleRoot() { streamDashboard(server); }
 
 inline void handleNow() {
 	AudioStateSnapshot audio = getAudioSnapshot();
@@ -515,13 +516,15 @@ inline void handleFileUploadProcess() {
 	HTTPUpload &upload = server.upload();
 	if (upload.status == UPLOAD_FILE_START) {
 		uploadAborted = false;
+		uploadError = "";
 		uploadBytesWritten = 0;
 		uploadFinalPath = "";
 		uploadTempPath = "";
 
 		uint64_t freeBytes = getSdFreeBytes();
-		if (freeBytes < (uint64_t)(MAX_UPLOAD_SIZE + MIN_SD_FREE_MARGIN)) {
+		if (freeBytes < MIN_SD_FREE_MARGIN) {
 			uploadAborted = true;
+			uploadError = "NO_SPACE";
 			return;
 		}
 
@@ -541,6 +544,7 @@ inline void handleFileUploadProcess() {
 
 		if (!isSafeUploadFilename(filename)) {
 			uploadAborted = true;
+			uploadError = "INVALID_FILE";
 			return;
 		}
 
@@ -550,6 +554,7 @@ inline void handleFileUploadProcess() {
 		SdGuard guard;
 		if (!canMutateStoragePathUnderGuard(uploadFinalPath)) {
 			uploadAborted = true;
+			uploadError = "INVALID_PATH";
 			return;
 		}
 
@@ -559,22 +564,36 @@ inline void handleFileUploadProcess() {
 		uploadFile = SD.open(uploadTempPath, FILE_WRITE);
 		if (!uploadFile) {
 			uploadAborted = true;
+			uploadError = "TEMP_OPEN_FAILED";
 		}
 	} else if (upload.status == UPLOAD_FILE_WRITE) {
 		if (!uploadAborted && uploadFile) {
 			uploadBytesWritten += upload.currentSize;
 			if (uploadBytesWritten > MAX_UPLOAD_SIZE) {
 				uploadAborted = true;
+				uploadError = "FILE_TOO_LARGE";
 				SdGuard guard;
 				uploadFile.close();
 				if (uploadTempPath.length() > 0 && SD.exists(uploadTempPath)) {
 					SD.remove(uploadTempPath);
 				}
 			} else {
+				uint64_t freeBytes = getSdFreeBytes();
+				if (freeBytes < MIN_SD_FREE_MARGIN) {
+					uploadAborted = true;
+					uploadError = "NO_SPACE";
+					SdGuard guard;
+					uploadFile.close();
+					if (uploadTempPath.length() > 0 && SD.exists(uploadTempPath)) {
+						SD.remove(uploadTempPath);
+					}
+					return;
+				}
 				SdGuard guard;
 				size_t written = uploadFile.write(upload.buf, upload.currentSize);
 				if (written != upload.currentSize) {
 					uploadAborted = true;
+					uploadError = "WRITE_FAILED";
 					uploadFile.close();
 					if (uploadTempPath.length() > 0 && SD.exists(uploadTempPath)) {
 						SD.remove(uploadTempPath);
@@ -582,35 +601,94 @@ inline void handleFileUploadProcess() {
 				}
 			}
 		}
-	} else if (upload.status == UPLOAD_FILE_END || upload.status == UPLOAD_FILE_ABORTED) {
+	} else if (upload.status == UPLOAD_FILE_END) {
 		if (uploadFile) {
 			SdGuard guard;
 			uploadFile.close();
 		}
-		if (upload.status == UPLOAD_FILE_END && !uploadAborted) {
+		if (!uploadAborted) {
 			SdGuard guard;
-			if (canMutateStoragePathUnderGuard(uploadFinalPath) &&
-				atomicReplaceFile(uploadTempPath, uploadFinalPath)) {
-				refreshSdStatsDirect();
-			} else {
+			if (!SD.exists(uploadTempPath)) {
 				uploadAborted = true;
-				if (SD.exists(uploadTempPath)) {
-					SD.remove(uploadTempPath);
-				}
+				uploadError = "TEMP_MISSING";
+				return;
 			}
+			File tempF = SD.open(uploadTempPath, FILE_READ);
+			size_t tempSize = tempF ? tempF.size() : 0;
+			if (tempF) {
+				tempF.close();
+			}
+			if (tempSize != uploadBytesWritten) {
+				uploadAborted = true;
+				uploadError = "VERIFY_FAILED";
+				SD.remove(uploadTempPath);
+				return;
+			}
+			if (!canMutateStoragePathUnderGuard(uploadFinalPath)) {
+				uploadAborted = true;
+				uploadError = "CANNOT_MUTATE";
+				SD.remove(uploadTempPath);
+				return;
+			}
+			if (SD.exists(uploadFinalPath)) {
+				SD.remove(uploadFinalPath);
+			}
+			if (!SD.rename(uploadTempPath, uploadFinalPath)) {
+				uploadAborted = true;
+				uploadError = "RENAME_FAILED";
+				SD.remove(uploadTempPath);
+				return;
+			}
+			File finalF = SD.open(uploadFinalPath, FILE_READ);
+			size_t finalSize = finalF ? finalF.size() : 0;
+			if (finalF) {
+				finalF.close();
+			}
+			if (finalSize != uploadBytesWritten) {
+				uploadAborted = true;
+				uploadError = "VERIFY_FINAL_FAILED";
+				SD.remove(uploadFinalPath);
+				return;
+			}
+			refreshSdStatsDirect();
 		} else {
 			SdGuard guard;
 			if (uploadTempPath.length() > 0 && SD.exists(uploadTempPath)) {
 				SD.remove(uploadTempPath);
 			}
 		}
+	} else if (upload.status == UPLOAD_FILE_ABORTED) {
+		if (uploadFile) {
+			SdGuard guard;
+			uploadFile.close();
+		}
+		SdGuard guard;
+		if (uploadTempPath.length() > 0 && SD.exists(uploadTempPath)) {
+			SD.remove(uploadTempPath);
+		}
+		uploadAborted = true;
+		if (uploadError.length() == 0) {
+			uploadError = "ABORTED";
+		}
 	}
 }
 
 inline void handleFileUploadResponse() {
+	if (server.hasArg("path") && uploadFile.name() == nullptr && uploadBytesWritten == 0 &&
+		!uploadAborted) {
+		String dirPath = server.arg("path");
+		if (isSafePath(dirPath) && canMutateStoragePathUnderGuard(dirPath)) {
+			SdGuard guard;
+			if (!SD.exists(dirPath)) {
+				SD.mkdir(dirPath);
+				server.send(200, "application/json", "{\"status\":\"ok\"}");
+				return;
+			}
+		}
+	}
 	if (uploadAborted) {
-		server.send(400, "application/json",
-					"{\"error\":\"upload failed, rejected, out of space, or exceeded limit\"}");
+		String err = uploadError.length() > 0 ? uploadError : "UPLOAD_FAILED";
+		server.send(400, "application/json", "{\"status\":\"error\",\"error\":\"" + err + "\"}");
 	} else {
 		server.send(200, "application/json", "{\"status\":\"ok\"}");
 	}

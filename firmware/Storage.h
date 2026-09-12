@@ -46,7 +46,7 @@ class SdGuard {
 
 inline SdStorageState getSdStorageState() { return g_sdStorageState; }
 inline void setSdStorageState(SdStorageState state) { g_sdStorageState = state; }
-inline bool isSdReady() { return g_sdStorageState == SdStorageState::Ready; }
+inline bool isSdReady() { return g_sdStorageState != SdStorageState::Error; }
 
 inline void setAudioPathActiveChecker(bool (*fn)(const String &)) { g_isAudioPathActiveCheck = fn; }
 
@@ -346,11 +346,15 @@ inline bool atomicReplaceFile(const String &tempPath, const String &targetPath) 
 	if (!isSdReady())
 		return false;
 	setSdStorageState(SdStorageState::Busy);
+	if (!SD.exists(tempPath)) {
+		setSdStorageState(SdStorageState::Ready);
+		return false;
+	}
 	if (SD.exists(targetPath)) {
 		SD.remove(targetPath);
 	}
 	bool ok = SD.rename(tempPath, targetPath);
-	setSdStorageState(ok ? SdStorageState::Ready : SdStorageState::Error);
+	setSdStorageState(SdStorageState::Ready);
 	return ok;
 }
 
@@ -396,10 +400,8 @@ inline bool deleteStoragePath(const String &path) {
 	bool ok = deleteStoragePathInternal(path);
 	if (ok) {
 		refreshSdStatsDirect();
-		setSdStorageState(SdStorageState::Ready);
-	} else {
-		setSdStorageState(SdStorageState::Error);
 	}
+	setSdStorageState(SdStorageState::Ready);
 	return ok;
 }
 
@@ -504,7 +506,7 @@ inline bool createPlaylist(const String &name) {
 	}
 	File f = SD.open(path, FILE_WRITE);
 	if (!f) {
-		setSdStorageState(SdStorageState::Error);
+		setSdStorageState(SdStorageState::Ready);
 		return false;
 	}
 	f.close();
@@ -525,7 +527,7 @@ inline bool renamePlaylist(const String &oldName, const String &newName) {
 		return false;
 	}
 	bool ok = SD.rename(oldPath, newPath);
-	setSdStorageState(ok ? SdStorageState::Ready : SdStorageState::Error);
+	setSdStorageState(SdStorageState::Ready);
 	return ok;
 }
 
@@ -542,10 +544,8 @@ inline bool deletePlaylist(const String &name) {
 	bool ok = SD.remove(path);
 	if (ok) {
 		refreshSdStatsDirect();
-		setSdStorageState(SdStorageState::Ready);
-	} else {
-		setSdStorageState(SdStorageState::Error);
 	}
+	setSdStorageState(SdStorageState::Ready);
 	return ok;
 }
 
@@ -565,7 +565,7 @@ inline bool appendPlaylistTrack(const String &name, const String &trackPath) {
 	}
 	File countF = SD.open(path, FILE_READ);
 	if (!countF) {
-		setSdStorageState(SdStorageState::Error);
+		setSdStorageState(SdStorageState::Ready);
 		return false;
 	}
 	size_t currentTracks = 0;
@@ -584,17 +584,13 @@ inline bool appendPlaylistTrack(const String &name, const String &trackPath) {
 
 	File f = SD.open(path, FILE_APPEND);
 	if (!f) {
-		setSdStorageState(SdStorageState::Error);
+		setSdStorageState(SdStorageState::Ready);
 		return false;
 	}
 	size_t written = f.println(trackPath);
 	f.close();
-	if (written > 0) {
-		setSdStorageState(SdStorageState::Ready);
-		return true;
-	}
-	setSdStorageState(SdStorageState::Error);
-	return false;
+	setSdStorageState(SdStorageState::Ready);
+	return (written > 0);
 }
 
 inline bool overwritePlaylistTracks(const String &name, const std::vector<String> &tracks) {
@@ -603,18 +599,37 @@ inline bool overwritePlaylistTracks(const String &name, const std::vector<String
 	setSdStorageState(SdStorageState::Busy);
 	SdGuard guard;
 	String path = getPlaylistPath(name);
+	String tempPath = path + ".tmp";
+	if (SD.exists(tempPath)) {
+		SD.remove(tempPath);
+	}
+	File f = SD.open(tempPath, FILE_WRITE);
+	if (!f) {
+		setSdStorageState(SdStorageState::Ready);
+		return false;
+	}
+	bool writeOk = true;
+	for (const String &tp : tracks) {
+		if (f.println(tp) == 0) {
+			writeOk = false;
+			break;
+		}
+	}
+	f.close();
+	if (!writeOk) {
+		if (SD.exists(tempPath)) {
+			SD.remove(tempPath);
+		}
+		setSdStorageState(SdStorageState::Ready);
+		return false;
+	}
 	if (SD.exists(path)) {
 		SD.remove(path);
 	}
-	File f = SD.open(path, FILE_WRITE);
-	if (!f) {
-		setSdStorageState(SdStorageState::Error);
-		return false;
+	bool renameOk = SD.rename(tempPath, path);
+	if (!renameOk && SD.exists(tempPath)) {
+		SD.remove(tempPath);
 	}
-	for (const String &tp : tracks) {
-		f.println(tp);
-	}
-	f.close();
 	setSdStorageState(SdStorageState::Ready);
-	return true;
+	return renameOk;
 }
