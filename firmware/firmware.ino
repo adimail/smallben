@@ -10,28 +10,45 @@
 void setup() {
 	Serial.begin(115200);
 	delay(200);
+	heapLog("boot");
 
 	bool audioOk = initAudio();
-	bool storageOk = initStorage();
+	heapLog("after initAudio");
+
+	initStorage();
+	heapLog("after initStorage");
+
 	initServer();
-	bool rfidOk = initRfid();
+	heapLog("after initServer");
+
+	initRfid();
+	heapLog("after initRfid");
+
 	initWiFi();
+	heapLog("after initWiFi(pin setup only)");
 
 	if (audioOk) {
 		startAudioTask();
-	}
-	if (rfidOk && storageOk) {
-		startRfidTask();
+		heapLog("after startAudioTask");
 	}
 
 	delay(100);
 	initControls();
+	heapLog("after initControls");
 }
 
 void loop() {
+	static unsigned long lastLog = 0;
 	handleControls();
-
+	handleRfidLoop();
 	if (isWiFiEnabled()) {
 		handleServer();
 	}
+	if (millis() - lastLog > 3000) {
+		lastLog = millis();
+		heapLog("loop tick");
+	}
+	vTaskDelay(pdMS_TO_TICKS(1));
 }
+
+

@@ -10,7 +10,6 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
-#include <vector>
 
 enum class AudioCmdType { Play, PlayPlaylist, Stop, Toggle, ReleaseI2S, ReclaimI2S, SetVolume };
 
@@ -165,6 +164,7 @@ inline bool reclaimAudioI2SInternal() {
 }
 
 inline bool startTrackInternal(const char *path) {
+	heapLog("startTrackInternal:enter");
 	stopPlaybackInternal();
 	if (!audioOut) {
 		return false;
@@ -185,11 +185,13 @@ inline bool startTrackInternal(const char *path) {
 	setAudioPathReserved(path);
 
 	audioFile = new AudioFileSourceSD(path);
+	heapLog("startTrackInternal:after new AudioFileSourceSD");
 	if (!audioFile) {
 		clearAudioPathReserved();
 		return false;
 	}
 	audioMp3 = new AudioGeneratorMP3();
+	heapLog("startTrackInternal:after new AudioGeneratorMP3");
 	if (!audioMp3) {
 		delete audioFile;
 		audioFile = nullptr;
@@ -197,6 +199,7 @@ inline bool startTrackInternal(const char *path) {
 		return false;
 	}
 	if (!audioMp3->begin(audioFile, audioOut)) {
+		heapLog("startTrackInternal:mp3 begin FAILED");
 		audioMp3->stop();
 		delete audioMp3;
 		audioMp3 = nullptr;
@@ -206,6 +209,7 @@ inline bool startTrackInternal(const char *path) {
 		clearAudioPathReserved();
 		return false;
 	}
+	heapLog("startTrackInternal:after mp3 begin (playing)");
 
 	strncpy(audioCurrentTrack, path, sizeof(audioCurrentTrack) - 1);
 	audioCurrentTrack[sizeof(audioCurrentTrack) - 1] = '\0';
@@ -215,6 +219,7 @@ inline bool startTrackInternal(const char *path) {
 }
 
 inline bool startPlaylistInternal(const char *name) {
+	heapLog("startPlaylistInternal:enter");
 	stopAudioInternal();
 	if (!name || strlen(name) == 0) {
 		return false;
@@ -223,8 +228,8 @@ inline bool startPlaylistInternal(const char *name) {
 	if (!isSafePlaylistName(pName)) {
 		return false;
 	}
-	std::vector<String> tracks = getPlaylistTrackList(pName);
-	if (tracks.empty()) {
+	size_t count = getPlaylistTrackCount(pName);
+	if (count == 0) {
 		return false;
 	}
 	audioIsPlaylist = true;
@@ -233,12 +238,15 @@ inline bool startPlaylistInternal(const char *name) {
 	audioCurrentPlaylistIndex = 0;
 
 	size_t attempts = 0;
-	while (attempts < tracks.size()) {
-		String trackPath = tracks[audioCurrentPlaylistIndex];
-		if (startTrackInternal(trackPath.c_str())) {
-			return true;
+	while (attempts < count) {
+		String trackPath;
+		if (getPlaylistTrackAt(pName, audioCurrentPlaylistIndex, trackPath)) {
+			if (startTrackInternal(trackPath.c_str())) {
+				heapLog("startPlaylistInternal:track started");
+				return true;
+			}
 		}
-		audioCurrentPlaylistIndex = (audioCurrentPlaylistIndex + 1) % tracks.size();
+		audioCurrentPlaylistIndex = (audioCurrentPlaylistIndex + 1) % count;
 		attempts++;
 	}
 	stopAudioInternal();
@@ -246,22 +254,26 @@ inline bool startPlaylistInternal(const char *name) {
 }
 
 inline void onTrackFinishedInternal() {
+	heapLog("onTrackFinishedInternal:enter");
 	if (audioIsPlaylist && strlen(audioCurrentPlaylistName) > 0) {
-		std::vector<String> tracks = getPlaylistTrackList(audioCurrentPlaylistName);
-		if (tracks.empty()) {
+		size_t count = getPlaylistTrackCount(audioCurrentPlaylistName);
+		if (count == 0) {
 			stopAudioInternal();
 			return;
 		}
-		audioCurrentPlaylistIndex = (audioCurrentPlaylistIndex + 1) % tracks.size();
+		audioCurrentPlaylistIndex = (audioCurrentPlaylistIndex + 1) % count;
 		size_t attempts = 0;
 		bool started = false;
-		while (attempts < tracks.size()) {
-			String nextTrack = tracks[audioCurrentPlaylistIndex];
-			if (startTrackInternal(nextTrack.c_str())) {
-				started = true;
-				break;
+		while (attempts < count) {
+			String nextTrack;
+			if (getPlaylistTrackAt(audioCurrentPlaylistName, audioCurrentPlaylistIndex,
+								   nextTrack)) {
+				if (startTrackInternal(nextTrack.c_str())) {
+					started = true;
+					break;
+				}
 			}
-			audioCurrentPlaylistIndex = (audioCurrentPlaylistIndex + 1) % tracks.size();
+			audioCurrentPlaylistIndex = (audioCurrentPlaylistIndex + 1) % count;
 			attempts++;
 		}
 		if (!started) {

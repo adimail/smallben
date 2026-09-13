@@ -5,15 +5,8 @@
 #include <Arduino.h>
 #include <MFRC522.h>
 #include <SPI.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/semphr.h>
-#include <freertos/task.h>
-#include <map>
-#include <vector>
 
-enum class UnmapResult { Ok, NotFound, StorageError };
-
-struct DiscMapping {
+struct DiscMappingRecord {
 	String uid;
 	String type;
 	String target;
@@ -30,45 +23,19 @@ struct RfidStateSnapshot {
 };
 
 static MFRC522 rfid(RFID_SS_PIN, RFID_RST_PIN);
-static SemaphoreHandle_t rfidMutex = nullptr;
-static TaskHandle_t rfidTaskHandle = nullptr;
 
-static std::map<String, DiscMapping> g_discMappings;
-static String g_rfidCurrentUid = "";
+static DiscMappingRecord g_rfidActiveMapping;
 static bool g_rfidIsPresent = false;
 static int g_rfidMissedPings = 0;
 static bool g_rfidAudioPlaying = false;
 static bool g_rfidEngineEnabled = true;
-
-inline void ensureRfidMutex() {
-	if (!rfidMutex) {
-		rfidMutex = xSemaphoreCreateMutex();
-	}
-}
-
-class RfidGuard {
-  public:
-	RfidGuard() {
-		ensureRfidMutex();
-		if (rfidMutex) {
-			xSemaphoreTake(rfidMutex, portMAX_DELAY);
-		}
-	}
-	~RfidGuard() {
-		if (rfidMutex) {
-			xSemaphoreGive(rfidMutex);
-		}
-	}
-	RfidGuard(const RfidGuard &) = delete;
-	RfidGuard &operator=(const RfidGuard &) = delete;
-};
+static unsigned long g_lastRfidPollTime = 0;
 
 inline void setRfidEnabled(bool enabled) {
-	RfidGuard rGuard;
 	g_rfidEngineEnabled = enabled;
 	if (!enabled) {
 		g_rfidIsPresent = false;
-		g_rfidCurrentUid = "";
+		g_rfidActiveMapping = DiscMappingRecord();
 		g_rfidMissedPings = 0;
 		g_rfidAudioPlaying = false;
 	}
@@ -83,68 +50,79 @@ inline String sanitizeField(const String &input) {
 	return out;
 }
 
-inline void loadDiscMappings() {
-	if (!isSdReady()) {
-		RfidGuard rGuard;
-		g_discMappings.clear();
-		return;
+inline bool parseMappingLine(const String &line, DiscMappingRecord &record) {
+	int p1 = line.indexOf('|');
+	int p2 = (p1 != -1) ? line.indexOf('|', p1 + 1) : -1;
+	int p3 = (p2 != -1) ? line.indexOf('|', p2 + 1) : -1;
+	if (p1 != -1 && p2 != -1 && p3 != -1) {
+		record.uid = line.substring(0, p1);
+		record.type = line.substring(p1 + 1, p2);
+		record.target = line.substring(p2 + 1, p3);
+		record.label = line.substring(p3 + 1);
+		return (record.uid.length() > 0 && record.target.length() > 0);
 	}
-	std::map<String, DiscMapping> loaded;
-	{
-		SdGuard guard;
-		if (SD.exists("/discs.csv")) {
-			File f = SD.open("/discs.csv", FILE_READ);
-			if (f) {
-				while (f.available()) {
-					String line = f.readStringUntil('\n');
-					line.trim();
-					if (line.length() == 0)
-						continue;
-					int p1 = line.indexOf('|');
-					int p2 = (p1 != -1) ? line.indexOf('|', p1 + 1) : -1;
-					int p3 = (p2 != -1) ? line.indexOf('|', p2 + 1) : -1;
-					if (p1 != -1 && p2 != -1 && p3 != -1) {
-						String uid = line.substring(0, p1);
-						String type = line.substring(p1 + 1, p2);
-						String target = line.substring(p2 + 1, p3);
-						String label = line.substring(p3 + 1);
-						if (uid.length() > 0 && target.length() > 0) {
-							loaded[uid] = {uid, type, target, label};
-						}
-					}
-				}
-				f.close();
-			}
-		}
-	}
-	RfidGuard rGuard;
-	g_discMappings = loaded;
+	return false;
 }
 
-inline bool saveDiscMappingsFile(const std::map<String, DiscMapping> &mappings) {
-	if (!isSdReady()) {
+inline bool findDiscMappingOnSd(const String &searchUid, DiscMappingRecord &outRecord) {
+	if (!isStorageReady()) {
 		return false;
 	}
 	SdGuard guard;
-	if (SD.exists("/discs.csv")) {
-		SD.remove("/discs.csv");
+	if (!SD.exists("/discs.csv")) {
+		return false;
 	}
-	File f = SD.open("/discs.csv", FILE_WRITE);
+	File f = SD.open("/discs.csv", FILE_READ);
 	if (!f) {
 		return false;
 	}
-	for (const auto &pair : mappings) {
-		f.println(pair.second.uid + "|" + pair.second.type + "|" + pair.second.target + "|" +
-				  pair.second.label);
+	bool found = false;
+	while (f.available()) {
+		String line = f.readStringUntil('\n');
+		line.trim();
+		if (line.length() == 0)
+			continue;
+		DiscMappingRecord rec;
+		if (parseMappingLine(line, rec) && rec.uid == searchUid) {
+			outRecord = rec;
+			found = true;
+			break;
+		}
 	}
 	f.close();
-	return true;
+	return found;
 }
 
-inline bool mapDisc(const String &rawUid, const String &rawType, const String &rawTarget,
-					const String &rawLabel) {
-	if (!isSdReady()) {
-		return false;
+template <typename Callback> inline void streamDiscMappingsFromSd(Callback cb) {
+	if (!isStorageReady()) {
+		return;
+	}
+	SdGuard guard;
+	if (!SD.exists("/discs.csv")) {
+		return;
+	}
+	File f = SD.open("/discs.csv", FILE_READ);
+	if (!f) {
+		return;
+	}
+	while (f.available()) {
+		String line = f.readStringUntil('\n');
+		line.trim();
+		if (line.length() == 0)
+			continue;
+		DiscMappingRecord rec;
+		if (parseMappingLine(line, rec)) {
+			cb(rec);
+		}
+	}
+	f.close();
+}
+
+inline StorageResult mapDisc(const String &rawUid, const String &rawType, const String &rawTarget,
+							 const String &rawLabel) {
+	heapLog("mapDisc:enter");
+	if (!isStorageReady()) {
+		return StorageResult::StorageUnavailable;
 	}
 
 	String uid = sanitizeField(rawUid);
@@ -153,185 +131,280 @@ inline bool mapDisc(const String &rawUid, const String &rawType, const String &r
 	String label = sanitizeField(rawLabel);
 
 	if (uid.length() == 0 || (type != "track" && type != "playlist") || target.length() == 0) {
-		return false;
+		return StorageResult::InvalidPath;
 	}
+
+	if (type == "track") {
+		if (!isValidPath(target) || !isMp3(target) || !storageExists(target)) {
+			return StorageResult::NotFound;
+		}
+	} else if (type == "playlist") {
+		if (!isValidPlaylistName(target) || !storageExists(getPlaylistPath(target))) {
+			return StorageResult::NotFound;
+		}
+	}
+
+	String destPath = "/discs.csv";
+	String tempPath = "/discs.tmp";
 
 	{
 		SdGuard guard;
-		if (type == "track") {
-			if (!isSafePath(target) || !isMp3(target) || !SD.exists(target)) {
-				return false;
+		File inF = SD.open(destPath, FILE_READ);
+		File outF = SD.open(tempPath, FILE_WRITE);
+		if (!outF) {
+			if (inF)
+				inF.close();
+			return StorageResult::OpenFailed;
+		}
+
+		bool overwritten = false;
+		if (inF) {
+			while (inF.available()) {
+				String line = inF.readStringUntil('\n');
+				line.trim();
+				if (line.length() == 0)
+					continue;
+				DiscMappingRecord rec;
+				if (parseMappingLine(line, rec)) {
+					if (rec.uid == uid) {
+						outF.print(uid);
+						outF.print('|');
+						outF.print(type);
+						outF.print('|');
+						outF.print(target);
+						outF.print('|');
+						outF.println(label.length() > 0 ? label : target);
+						overwritten = true;
+					} else {
+						outF.println(line);
+					}
+				}
 			}
-		} else if (type == "playlist") {
-			if (!isSafePlaylistName(target) || !SD.exists(getPlaylistPath(target))) {
-				return false;
-			}
+			inF.close();
+		}
+
+		if (!overwritten) {
+			outF.print(uid);
+			outF.print('|');
+			outF.print(type);
+			outF.print('|');
+			outF.print(target);
+			outF.print('|');
+			outF.println(label.length() > 0 ? label : target);
+		}
+		outF.close();
+
+		StorageResult res = replaceFileSafelyUnderGuard(tempPath, destPath);
+		if (res != StorageResult::Ok) {
+			return res;
 		}
 	}
 
-	std::map<String, DiscMapping> updated;
-	{
-		RfidGuard rGuard;
-		if (g_discMappings.find(uid) == g_discMappings.end() &&
-			g_discMappings.size() >= MAX_DISCS_MAPPINGS) {
-			return false;
-		}
-		updated = g_discMappings;
-		updated[uid] = {uid, type, target, label.length() > 0 ? label : target};
-	}
-	if (!saveDiscMappingsFile(updated)) {
-		return false;
-	}
-	{
-		RfidGuard rGuard;
-		g_discMappings = updated;
-	}
+	if (g_rfidEngineEnabled && g_rfidIsPresent && g_rfidActiveMapping.uid == uid) {
+		g_rfidActiveMapping.type = type;
+		g_rfidActiveMapping.target = target;
+		g_rfidActiveMapping.label = label.length() > 0 ? label : target;
 
-	bool shouldPlayNow = false;
-	{
-		RfidGuard rGuard;
-		if (g_rfidEngineEnabled && g_rfidIsPresent && g_rfidCurrentUid == uid &&
-			!g_rfidAudioPlaying) {
-			shouldPlayNow = true;
-		}
-	}
-
-	if (shouldPlayNow) {
 		requestAudioStop();
+		g_rfidAudioPlaying = false;
 		if (type == "track") {
 			if (requestAudioPlay(target)) {
-				RfidGuard rGuard;
 				g_rfidAudioPlaying = true;
 			}
 		} else if (type == "playlist") {
 			if (requestAudioPlayPlaylist(target)) {
-				RfidGuard rGuard;
 				g_rfidAudioPlaying = true;
 			}
 		}
 	}
 
-	return true;
+	heapLog("mapDisc:done");
+	return StorageResult::Ok;
 }
 
-inline UnmapResult unmapDisc(const String &rawUid) {
-	if (!isSdReady()) {
-		return UnmapResult::StorageError;
+inline StorageResult unmapDisc(const String &rawUid) {
+	heapLog("unmapDisc:enter");
+	if (!isStorageReady()) {
+		return StorageResult::StorageUnavailable;
 	}
 
 	String uid = sanitizeField(rawUid);
-	std::map<String, DiscMapping> updated;
+	String destPath = "/discs.csv";
+	String tempPath = "/discs.tmp";
+
+	bool found = false;
 	{
-		RfidGuard rGuard;
-		if (g_discMappings.find(uid) == g_discMappings.end()) {
-			return UnmapResult::NotFound;
+		SdGuard guard;
+		File inF = SD.open(destPath, FILE_READ);
+		if (!inF) {
+			return StorageResult::NotFound;
 		}
-		updated = g_discMappings;
-		updated.erase(uid);
+		File outF = SD.open(tempPath, FILE_WRITE);
+		if (!outF) {
+			inF.close();
+			return StorageResult::OpenFailed;
+		}
+
+		while (inF.available()) {
+			String line = inF.readStringUntil('\n');
+			line.trim();
+			if (line.length() == 0)
+				continue;
+			DiscMappingRecord rec;
+			if (parseMappingLine(line, rec)) {
+				if (rec.uid == uid) {
+					found = true;
+				} else {
+					outF.println(line);
+				}
+			}
+		}
+		inF.close();
+		outF.close();
+
+		if (!found) {
+			SD.remove(tempPath);
+			return StorageResult::NotFound;
+		}
+
+		StorageResult res = replaceFileSafelyUnderGuard(tempPath, destPath);
+		if (res != StorageResult::Ok) {
+			return res;
+		}
 	}
-	if (!saveDiscMappingsFile(updated)) {
-		return UnmapResult::StorageError;
+
+	if (g_rfidActiveMapping.uid == uid) {
+		g_rfidActiveMapping.type = "";
+		g_rfidActiveMapping.target = "";
+		g_rfidActiveMapping.label = "";
 	}
-	{
-		RfidGuard rGuard;
-		g_discMappings = updated;
-	}
-	return UnmapResult::Ok;
+
+	heapLog("unmapDisc:done");
+	return StorageResult::Ok;
 }
 
 inline bool cascadeRenamePlaylist(const String &oldName, const String &newName) {
-	if (!isSdReady()) {
+	if (!isStorageReady()) {
 		return false;
 	}
-	std::map<String, DiscMapping> updated;
+	String destPath = "/discs.csv";
+	String tempPath = "/discs.tmp";
+
 	bool changed = false;
 	{
-		RfidGuard rGuard;
-		updated = g_discMappings;
-		for (auto &pair : updated) {
-			if (pair.second.type == "playlist" && pair.second.target == oldName) {
-				pair.second.target = newName;
-				if (pair.second.label == oldName) {
-					pair.second.label = newName;
+		SdGuard guard;
+		File inF = SD.open(destPath, FILE_READ);
+		if (!inF) {
+			return true;
+		}
+		File outF = SD.open(tempPath, FILE_WRITE);
+		if (!outF) {
+			inF.close();
+			return false;
+		}
+
+		while (inF.available()) {
+			String line = inF.readStringUntil('\n');
+			line.trim();
+			if (line.length() == 0)
+				continue;
+			DiscMappingRecord rec;
+			if (parseMappingLine(line, rec)) {
+				if (rec.type == "playlist" && rec.target == oldName) {
+					rec.target = newName;
+					if (rec.label == oldName) {
+						rec.label = newName;
+					}
+					outF.print(rec.uid);
+					outF.print('|');
+					outF.print(rec.type);
+					outF.print('|');
+					outF.print(rec.target);
+					outF.print('|');
+					outF.println(rec.label);
+					changed = true;
+				} else {
+					outF.println(line);
 				}
-				changed = true;
 			}
 		}
+		inF.close();
+		outF.close();
+
+		if (!changed) {
+			SD.remove(tempPath);
+			return true;
+		}
+
+		return (replaceFileSafelyUnderGuard(tempPath, destPath) == StorageResult::Ok);
 	}
-	if (!changed)
-		return true;
-	if (!saveDiscMappingsFile(updated)) {
-		return false;
-	}
-	{
-		RfidGuard rGuard;
-		g_discMappings = updated;
-	}
-	return true;
 }
 
 inline bool cascadeDeletePlaylist(const String &name) {
-	if (!isSdReady()) {
+	if (!isStorageReady()) {
 		return false;
 	}
-	std::map<String, DiscMapping> updated;
+	String destPath = "/discs.csv";
+	String tempPath = "/discs.tmp";
+
 	bool changed = false;
 	{
-		RfidGuard rGuard;
-		updated = g_discMappings;
-		for (auto it = updated.begin(); it != updated.end();) {
-			if (it->second.type == "playlist" && it->second.target == name) {
-				it = updated.erase(it);
-				changed = true;
-			} else {
-				++it;
+		SdGuard guard;
+		File inF = SD.open(destPath, FILE_READ);
+		if (!inF) {
+			return true;
+		}
+		File outF = SD.open(tempPath, FILE_WRITE);
+		if (!outF) {
+			inF.close();
+			return false;
+		}
+
+		while (inF.available()) {
+			String line = inF.readStringUntil('\n');
+			line.trim();
+			if (line.length() == 0)
+				continue;
+			DiscMappingRecord rec;
+			if (parseMappingLine(line, rec)) {
+				if (rec.type == "playlist" && rec.target == name) {
+					changed = true;
+				} else {
+					outF.println(line);
+				}
 			}
 		}
-	}
-	if (!changed)
-		return true;
-	if (!saveDiscMappingsFile(updated)) {
-		return false;
-	}
-	{
-		RfidGuard rGuard;
-		g_discMappings = updated;
-	}
-	return true;
-}
+		inF.close();
+		outF.close();
 
-inline std::vector<DiscMapping> getDiscMappingsSnapshot() {
-	RfidGuard rGuard;
-	std::vector<DiscMapping> list;
-	list.reserve(g_discMappings.size());
-	for (const auto &pair : g_discMappings) {
-		list.push_back(pair.second);
+		if (!changed) {
+			SD.remove(tempPath);
+			return true;
+		}
+
+		return (replaceFileSafelyUnderGuard(tempPath, destPath) == StorageResult::Ok);
 	}
-	return list;
 }
 
 inline RfidStateSnapshot getRfidSnapshot() {
-	RfidGuard rGuard;
 	RfidStateSnapshot snap;
 	snap.present = g_rfidIsPresent;
 	snap.mapped = false;
-	strncpy(snap.uid, g_rfidCurrentUid.c_str(), sizeof(snap.uid) - 1);
+	strncpy(snap.uid, g_rfidActiveMapping.uid.c_str(), sizeof(snap.uid) - 1);
 	snap.uid[sizeof(snap.uid) - 1] = '\0';
 	snap.type[0] = '\0';
 	snap.target[0] = '\0';
 	snap.label[0] = '\0';
 
-	if (g_rfidIsPresent && g_rfidCurrentUid.length() > 0) {
-		auto it = g_discMappings.find(g_rfidCurrentUid);
-		if (it != g_discMappings.end()) {
-			snap.mapped = true;
-			strncpy(snap.type, it->second.type.c_str(), sizeof(snap.type) - 1);
-			snap.type[sizeof(snap.type) - 1] = '\0';
-			strncpy(snap.target, it->second.target.c_str(), sizeof(snap.target) - 1);
-			snap.target[sizeof(snap.target) - 1] = '\0';
-			strncpy(snap.label, it->second.label.c_str(), sizeof(snap.label) - 1);
-			snap.label[sizeof(snap.label) - 1] = '\0';
-		}
+	if (g_rfidIsPresent && g_rfidActiveMapping.uid.length() > 0 &&
+		g_rfidActiveMapping.target.length() > 0) {
+		snap.mapped = true;
+		strncpy(snap.type, g_rfidActiveMapping.type.c_str(), sizeof(snap.type) - 1);
+		snap.type[sizeof(snap.type) - 1] = '\0';
+		strncpy(snap.target, g_rfidActiveMapping.target.c_str(), sizeof(snap.target) - 1);
+		snap.target[sizeof(snap.target) - 1] = '\0';
+		strncpy(snap.label, g_rfidActiveMapping.label.c_str(), sizeof(snap.label) - 1);
+		snap.label[sizeof(snap.label) - 1] = '\0';
 	}
 	return snap;
 }
@@ -364,104 +437,82 @@ inline bool scanCardPresence(String &outUid) {
 }
 
 inline void handleRfidPoll() {
-	{
-		RfidGuard rGuard;
-		if (!g_rfidEngineEnabled) {
-			return;
-		}
+	if (!g_rfidEngineEnabled) {
+		return;
 	}
 
 	String detectedUid = "";
 	bool found = scanCardPresence(detectedUid);
 	if (found) {
 		bool isNew = false;
-		DiscMapping mapping;
-		bool hasMapping = false;
-		{
-			RfidGuard rGuard;
-			if (!g_rfidEngineEnabled) {
-				return;
-			}
-			if (!g_rfidIsPresent || detectedUid != g_rfidCurrentUid) {
-				isNew = true;
-				g_rfidCurrentUid = detectedUid;
-				g_rfidIsPresent = true;
-				g_rfidMissedPings = 0;
-				g_rfidAudioPlaying = false;
-				auto it = g_discMappings.find(detectedUid);
-				if (it != g_discMappings.end()) {
-					mapping = it->second;
-					hasMapping = true;
-				}
-			} else {
-				g_rfidMissedPings = 0;
-			}
+		if (!g_rfidIsPresent || detectedUid != g_rfidActiveMapping.uid) {
+			isNew = true;
+			g_rfidActiveMapping = DiscMappingRecord();
+			g_rfidActiveMapping.uid = detectedUid;
+			g_rfidIsPresent = true;
+			g_rfidMissedPings = 0;
+			g_rfidAudioPlaying = false;
+			findDiscMappingOnSd(detectedUid, g_rfidActiveMapping);
+		} else {
+			g_rfidMissedPings = 0;
 		}
 
 		if (isNew) {
+			heapLog("RFID:disc DETECTED (new)");
 			requestAudioStop();
-			if (hasMapping) {
-				if (mapping.type == "track") {
-					if (requestAudioPlay(mapping.target)) {
-						RfidGuard rGuard;
+			heapLog("RFID:after requestAudioStop");
+			if (g_rfidActiveMapping.target.length() > 0) {
+				if (g_rfidActiveMapping.type == "track") {
+					heapLog("RFID:before requestAudioPlay(track)");
+					if (requestAudioPlay(g_rfidActiveMapping.target)) {
 						g_rfidAudioPlaying = true;
 					}
-				} else if (mapping.type == "playlist") {
-					if (requestAudioPlayPlaylist(mapping.target)) {
-						RfidGuard rGuard;
+					heapLog("RFID:after requestAudioPlay(track)");
+				} else if (g_rfidActiveMapping.type == "playlist") {
+					heapLog("RFID:before requestAudioPlayPlaylist");
+					if (requestAudioPlayPlaylist(g_rfidActiveMapping.target)) {
 						g_rfidAudioPlaying = true;
 					}
+					heapLog("RFID:after requestAudioPlayPlaylist");
 				}
+			} else {
+				heapLog("RFID:disc detected but NOT mapped");
 			}
 		}
 	} else {
 		bool shouldStop = false;
-		{
-			RfidGuard rGuard;
-			if (g_rfidIsPresent) {
-				g_rfidMissedPings++;
-				if (g_rfidMissedPings >= 3) {
-					g_rfidIsPresent = false;
-					g_rfidCurrentUid = "";
-					g_rfidMissedPings = 0;
-					if (g_rfidAudioPlaying) {
-						g_rfidAudioPlaying = false;
-						shouldStop = true;
-					}
+		if (g_rfidIsPresent) {
+			g_rfidMissedPings++;
+			if (g_rfidMissedPings >= 3) {
+				g_rfidIsPresent = false;
+				g_rfidActiveMapping = DiscMappingRecord();
+				g_rfidMissedPings = 0;
+				if (g_rfidAudioPlaying) {
+					g_rfidAudioPlaying = false;
+					shouldStop = true;
 				}
 			}
 		}
 		if (shouldStop) {
+			heapLog("RFID:disc REMOVED, stopping audio");
 			requestAudioStop();
+			heapLog("RFID:after stop-on-removal");
 		}
 	}
 }
 
-inline void rfidTaskLoop(void *param) {
-	for (;;) {
+inline void handleRfidLoop() {
+	unsigned long now = millis();
+	if (now - g_lastRfidPollTime >= 120) {
+		g_lastRfidPollTime = now;
 		handleRfidPoll();
-		vTaskDelay(pdMS_TO_TICKS(120));
 	}
 }
 
 inline bool initRfid() {
-	ensureRfidMutex();
-	if (!rfidMutex) {
-		return false;
-	}
 	pinMode(RFID_SS_PIN, OUTPUT);
 	digitalWrite(RFID_SS_PIN, HIGH);
 	SPI.begin(RFID_SCK_PIN, RFID_MISO_PIN, RFID_MOSI_PIN, RFID_SS_PIN);
 	rfid.PCD_Init();
-	loadDiscMappings();
-	return true;
-}
-
-inline bool startRfidTask() {
-	if (!rfidTaskHandle) {
-		BaseType_t res =
-			xTaskCreatePinnedToCore(rfidTaskLoop, "rfidTask", 4096, nullptr, 2, &rfidTaskHandle, 1);
-		return (res == pdPASS);
-	}
 	return true;
 }

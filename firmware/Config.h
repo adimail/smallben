@@ -28,31 +28,33 @@ const uint16_t HTTP_PORT = 80;
 
 const char *BT_DEVICE_NAME = "Smallben";
 
-const size_t MAX_UPLOAD_SIZE = 31457280;
+const size_t MAX_UPLOAD_SIZE = 10485760;
+const size_t MAX_PLAYLISTS = 10;
 const size_t MIN_SD_FREE_MARGIN = 2097152;
 const size_t MAX_JSON_BODY_SIZE = 16384;
 
-const char *const HIDDEN_EXACT_NAMES[] = {"playlists",	  "system volume information",
-										  "thumbs.db",	  ".ds_store",
-										  "discs.csv",	  "discs.tmp",
-										  "discs.new",	  "discs.bak",
-										  "discs.csv.bak"};
+const char *const HIDDEN_EXACT_NAMES[] = {
+	"p",		 "playlists", "smallben",	  "system volume information",
+	"thumbs.db", ".ds_store", "discs.csv",	  "discs.tmp",
+	"discs.new", "discs.bak", "discs.csv.bak"};
 const size_t NUM_HIDDEN_EXACT_NAMES = sizeof(HIDDEN_EXACT_NAMES) / sizeof(HIDDEN_EXACT_NAMES[0]);
 
-const char *const HIDDEN_EXTENSIONS[] = {".m3u", ".db",	 ".dat",	   ".idx", ".bin",
-										 ".sys", ".tmp", ".uploading", ".bak", ".new"};
+const char *const HIDDEN_EXTENSIONS[] = {".db",	 ".dat",	   ".idx", ".bin", ".sys",
+										 ".tmp", ".uploading", ".bak", ".new"};
 const size_t NUM_HIDDEN_EXTENSIONS = sizeof(HIDDEN_EXTENSIONS) / sizeof(HIDDEN_EXTENSIONS[0]);
 
 const char *const HIDDEN_PREFIXES[] = {".", "._"};
 const size_t NUM_HIDDEN_PREFIXES = sizeof(HIDDEN_PREFIXES) / sizeof(HIDDEN_PREFIXES[0]);
 
 const uint32_t AUDIO_TASK_STACK_SIZE = 8192;
-const UBaseType_t AUDIO_TASK_PRIORITY = 4;
+const UBaseType_t AUDIO_TASK_PRIORITY = 5;
 const BaseType_t AUDIO_TASK_CORE = 1;
 const TickType_t AUDIO_TASK_DELAY_TICKS = 1;
-const int I2S_DMA_BUFFER_COUNT = 32;
+const int I2S_DMA_BUFFER_COUNT = 8;
 
-const size_t MAX_TRACKS_CACHE = 512;
-const size_t MAX_PLAYLISTS_CACHE = 64;
 const size_t MAX_PLAYLIST_TRACKS = 128;
-const size_t MAX_DISCS_MAPPINGS = 128;
+
+inline void heapLog(const char *tag) {
+	Serial.printf("[HEAP] %-28s free=%u maxalloc=%u minever=%u psram=%u\n", tag, ESP.getFreeHeap(),
+				  ESP.getMaxAllocHeap(), ESP.getMinFreeHeap(), ESP.getPsramSize());
+}
