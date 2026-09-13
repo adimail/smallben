@@ -146,7 +146,7 @@ inline bool isValidPlaylistName(const String &name) {
 
 inline bool isProtectedPath(const String &path) {
 	String p = normalizePath(path);
-	if (p == "/" || p == "/playlists") {
+	if (p == "/" || p == "/p") {
 		return true;
 	}
 	String lower = p;
@@ -213,7 +213,7 @@ inline String getPlaylistPath(String name) {
 	if (!name.endsWith(".m3u")) {
 		name += ".m3u";
 	}
-	return "/playlists/" + name;
+	return "/p/" + name;
 }
 
 inline String urldecode(const String &src) {
@@ -332,8 +332,8 @@ inline bool initStorage() {
 	}
 	{
 		SdGuard guard;
-		if (!SD.exists("/playlists")) {
-			if (!SD.mkdir("/playlists")) {
+		if (!SD.exists("/p")) {
+			if (!SD.mkdir("/p")) {
 				g_sdReady = false;
 				return false;
 			}
@@ -561,8 +561,8 @@ inline StorageResult createPlaylist(const String &name) {
 
 	String path = getPlaylistPath(name);
 	SdGuard guard;
-	if (!SD.exists("/playlists")) {
-		if (!SD.mkdir("/playlists")) {
+	if (!SD.exists("/p")) {
+		if (!SD.mkdir("/p")) {
 			return StorageResult::WriteFailed;
 		}
 	}

@@ -376,7 +376,7 @@ function openTrackDrawer(t){
   drawerOverlay.classList.add('open');
   trackDrawer.classList.add('open');
 
-  fetch('/api/track/playlists?path=' + encodeURIComponent(t.path))
+  fetch('/api/track/p?path=' + encodeURIComponent(t.path))
     .then(r => r.json())
     .then(res => {
       dTrackPlaylists.innerHTML = '';
@@ -416,7 +416,7 @@ btnConfirmAddPlist.onclick = () => {
   if(!activeSelectedTrack) return;
   const targetPlist = sidebarPlistSelect.value;
   if(!targetPlist) return;
-  fetch('/api/playlists/tracks?id=' + encodeURIComponent(targetPlist), {
+  fetch('/api/p/tracks?id=' + encodeURIComponent(targetPlist), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path: activeSelectedTrack.path })
@@ -461,7 +461,7 @@ btnSidebarDelete.onclick = () => {
 };
 
 function loadPlaylists(){
-  fetch('/api/playlists').then(r=>r.json()).then(d=>{
+  fetch('/api/p').then(r=>r.json()).then(d=>{
     playlists = d;
     plistCount.textContent = d.length + ' playlists';
     plistCards.innerHTML = '';
@@ -501,7 +501,7 @@ btnCancelNewPlist.onclick = () => { newPlistForm.style.display = 'none'; };
 btnConfirmNewPlist.onclick = () => {
   const n = newPlistNameInput.value.trim();
   if(!n) return;
-  fetch('/api/playlists', {
+  fetch('/api/p', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({name: n})
@@ -526,7 +526,7 @@ function openPlaylist(name){
   plistHeadTitle.textContent = name;
   plistDetailCount.textContent = 'Loading...';
   detailTrackList.innerHTML = '<div class="msg">Loading tracks...</div>';
-  fetch('/api/playlists/' + encodeURIComponent(name) + '/tracks')
+  fetch('/api/p/' + encodeURIComponent(name) + '/tracks')
     .then(r=>r.json())
     .then(list => {
       currentPlaylistTracks = list;
@@ -594,7 +594,7 @@ btnOpenPlistSettings.onclick = () => {
 btnSavePlistRename.onclick = () => {
   const n = inputRenamePlist.value.trim();
   if(!n || n === currentPlaylist) return;
-  fetch('/api/playlists/' + encodeURIComponent(currentPlaylist), {
+  fetch('/api/p/' + encodeURIComponent(currentPlaylist), {
     method: 'PUT',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({newName: n})
@@ -622,7 +622,7 @@ btnMapPlistDisc.onclick = () => {
 
 btnDeletePlist.onclick = () => {
   if(!confirm('Permanently delete playlist ' + currentPlaylist + '?')) return;
-  fetch('/api/playlists/' + encodeURIComponent(currentPlaylist), { method: 'DELETE' })
+  fetch('/api/p/' + encodeURIComponent(currentPlaylist), { method: 'DELETE' })
     .then(async r => {
       const d = await r.json().catch(() => ({}));
       if(!r.ok || d.status !== 'ok'){

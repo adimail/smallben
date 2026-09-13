@@ -307,7 +307,7 @@ inline void handleApiTrackPlaylists() {
 
 	if (isStorageReady()) {
 		SdGuard guard;
-		File dir = SD.open("/playlists");
+		File dir = SD.open("/p");
 		if (dir && dir.isDirectory()) {
 			while (true) {
 				File entry = dir.openNextFile();
@@ -320,7 +320,7 @@ inline void handleApiTrackPlaylists() {
 				String lower = name;
 				lower.toLowerCase();
 				if (!isDir && lower.endsWith(".m3u") && !isSystemOrHidden(name)) {
-					String fullPath = "/playlists/" + name;
+					String fullPath = "/p/" + name;
 					File f = SD.open(fullPath, FILE_READ);
 					bool found = false;
 					if (f) {
@@ -650,7 +650,7 @@ inline void handleApiPlaylistsGet() {
 	bool first = true;
 
 	SdGuard guard;
-	File dir = SD.open("/playlists");
+	File dir = SD.open("/p");
 	if (dir && dir.isDirectory()) {
 		while (true) {
 			File entry = dir.openNextFile();
@@ -663,7 +663,7 @@ inline void handleApiPlaylistsGet() {
 			String lower = name;
 			lower.toLowerCase();
 			if (!isDir && lower.endsWith(".m3u") && !isSystemOrHidden(name)) {
-				String fullPath = "/playlists/" + name;
+				String fullPath = "/p/" + name;
 				int count = 0;
 				File f = SD.open(fullPath, FILE_READ);
 				if (f) {
@@ -676,10 +676,11 @@ inline void handleApiPlaylistsGet() {
 					}
 					f.close();
 				}
+				String baseName = name.substring(0, name.length() - 4);
 				if (!first)
 					server.sendContent(",");
 				first = false;
-				server.sendContent("{\"name\":\"" + jsonEscape(name) +
+				server.sendContent("{\"name\":\"" + jsonEscape(baseName) +
 								   "\",\"trackCount\":" + String(count) + "}");
 			}
 		}
@@ -705,11 +706,11 @@ inline void handleApiPlaylistsPost() {
 
 inline void handleApiPlaylistTracksGet() {
 	String uri = server.uri();
-	int prefixLen = 15;
+	const String prefix = "/api/p/";
 	int trackSuffix = uri.indexOf("/tracks");
 	String id = "";
-	if (trackSuffix != -1) {
-		id = urldecode(uri.substring(prefixLen, trackSuffix));
+	if (trackSuffix != -1 && trackSuffix > (int)prefix.length()) {
+		id = urldecode(uri.substring(prefix.length(), trackSuffix));
 	}
 	if (!isValidPlaylistName(id)) {
 		server.send(400, "application/json", "{\"error\":\"invalid id\"}");
@@ -889,12 +890,13 @@ inline void handleApiPlayerStatus() {
 inline void handleDynamicPlaylists() {
 	String uri = server.uri();
 	HTTPMethod method = server.method();
-	if (uri.startsWith("/api/playlists/") && uri.endsWith("/tracks") && method == HTTP_GET) {
+	if (uri.startsWith("/api/p/") && uri.endsWith("/tracks") && method == HTTP_GET) {
 		handleApiPlaylistTracksGet();
 		return;
 	}
-	if (uri.startsWith("/api/playlists/")) {
-		String id = urldecode(uri.substring(15));
+	const String prefix = "/api/p/";
+	if (uri.startsWith(prefix)) {
+		String id = urldecode(uri.substring(prefix.length()));
 		if (!isValidPlaylistName(id)) {
 			server.send(400, "application/json", "{\"error\":\"invalid id\"}");
 			return;
@@ -941,7 +943,7 @@ inline void initServer() {
 	server.on("/", HTTP_GET, handleRoot);
 	server.on("/now", HTTP_GET, handleNow);
 	server.on("/api/mp3", HTTP_GET, handleApiMp3);
-	server.on("/api/track/playlists", HTTP_GET, handleApiTrackPlaylists);
+	server.on("/api/track/p", HTTP_GET, handleApiTrackPlaylists);
 	server.on("/api/tree", HTTP_GET, handleApiTree);
 	server.on("/api/folders", HTTP_POST, handleApiFolderCreate);
 	server.on("/api/delete", HTTP_DELETE, handleApiDelete);
@@ -955,10 +957,10 @@ inline void initServer() {
 	server.on("/api/player/toggle", HTTP_POST, handleApiPlayerToggle);
 	server.on("/api/player/status", HTTP_GET, handleApiPlayerStatus);
 
-	server.on("/api/playlists", HTTP_GET, handleApiPlaylistsGet);
-	server.on("/api/playlists", HTTP_POST, handleApiPlaylistsPost);
-	server.on("/api/playlists/tracks", HTTP_PUT, handleApiPlaylistTracksUpdate);
-	server.on("/api/playlists/tracks", HTTP_POST, handleApiPlaylistTracksAppend);
+	server.on("/api/p", HTTP_GET, handleApiPlaylistsGet);
+	server.on("/api/p", HTTP_POST, handleApiPlaylistsPost);
+	server.on("/api/p/tracks", HTTP_PUT, handleApiPlaylistTracksUpdate);
+	server.on("/api/p/tracks", HTTP_POST, handleApiPlaylistTracksAppend);
 
 	server.onNotFound(handleDynamicPlaylists);
 }

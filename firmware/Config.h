@@ -39,8 +39,8 @@ const char *const HIDDEN_EXACT_NAMES[] = {"playlists",	  "system volume informat
 										  "discs.csv.bak"};
 const size_t NUM_HIDDEN_EXACT_NAMES = sizeof(HIDDEN_EXACT_NAMES) / sizeof(HIDDEN_EXACT_NAMES[0]);
 
-const char *const HIDDEN_EXTENSIONS[] = {".m3u", ".db",	 ".dat",	   ".idx", ".bin",
-										 ".sys", ".tmp", ".uploading", ".bak", ".new"};
+const char *const HIDDEN_EXTENSIONS[] = {".db",	 ".dat",	   ".idx", ".bin", ".sys",
+										 ".tmp", ".uploading", ".bak", ".new"};
 const size_t NUM_HIDDEN_EXTENSIONS = sizeof(HIDDEN_EXTENSIONS) / sizeof(HIDDEN_EXTENSIONS[0]);
 
 const char *const HIDDEN_PREFIXES[] = {".", "._"};
