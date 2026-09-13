@@ -657,17 +657,6 @@ inline void handleFileUploadProcess() {
 					SD.remove(uploadTempPath);
 				}
 			} else {
-				uint64_t freeBytes = getSdFreeBytes();
-				if (freeBytes < MIN_SD_FREE_MARGIN) {
-					uploadAborted = true;
-					uploadError = "NO_SPACE";
-					SdGuard guard;
-					uploadFile.close();
-					if (uploadTempPath.length() > 0 && SD.exists(uploadTempPath)) {
-						SD.remove(uploadTempPath);
-					}
-					return;
-				}
 				SdGuard guard;
 				size_t written = uploadFile.write(upload.buf, upload.currentSize);
 				if (written != upload.currentSize) {

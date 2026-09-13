@@ -31,8 +31,10 @@ const unsigned long LONG_PRESS_DURATION_MS = 800;
 
 inline PlaybackMode getCurrentMode() { return currentMode; }
 
-inline void applyPotVolume() {
-	int raw = analogRead(VOLUME_POT_PIN);
+inline void applyPotVolume(int raw = -1) {
+	if (raw < 0) {
+		raw = analogRead(VOLUME_POT_PIN);
+	}
 	lastPotVal = raw;
 	if (currentMode == PlaybackMode::Bluetooth) {
 		setBluetoothVolume(raw / 32);
@@ -50,7 +52,7 @@ inline void handleVolume() {
 
 	int raw = analogRead(VOLUME_POT_PIN);
 	if (abs(raw - lastPotVal) > 30) {
-		applyPotVolume();
+		applyPotVolume(raw);
 	}
 }
 
