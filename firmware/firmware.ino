@@ -7,6 +7,23 @@
 #include "Storage.h"
 #include "WifiManager.h"
 
+static TaskHandle_t appTaskHandle = nullptr;
+
+void appTaskLoop(void *param) {
+	unsigned long lastLog = 0;
+	for (;;) {
+		handleControls();
+		if (isWiFiEnabled()) {
+			handleServer();
+		}
+		if (millis() - lastLog > 3000) {
+			lastLog = millis();
+			heapLog("loop tick");
+		}
+		vTaskDelay(pdMS_TO_TICKS(1));
+	}
+}
+
 void setup() {
 	Serial.begin(115200);
 	delay(200);
@@ -39,16 +56,10 @@ void setup() {
 	delay(100);
 	initControls();
 	heapLog("after initControls");
+
+	xTaskCreatePinnedToCore(appTaskLoop, "appTask", 4096, nullptr, 1, &appTaskHandle, 0);
 }
 
 void loop() {
-	handleControls();
-	if (isWiFiEnabled()) {
-		handleServer();
-	}
-	static unsigned long lastLog = 0;
-	if (millis() - lastLog > 3000) {
-		lastLog = millis();
-		heapLog("loop tick");
-	}
+	vTaskDelay(pdMS_TO_TICKS(1000));
 }
