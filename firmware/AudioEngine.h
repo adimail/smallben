@@ -19,10 +19,10 @@ struct AudioCommand {
 	float gain;
 };
 
-struct AudioStateSnapshot {
-	bool valid;
+struct AudioState {
 	bool isPlaying;
 	bool isPaused;
+	bool isStarting;
 	char path[128];
 };
 
@@ -30,9 +30,7 @@ static AudioGeneratorMP3 *audioMp3 = nullptr;
 static AudioFileSourceSD *audioFile = nullptr;
 static AudioOutputI2S *audioOut = nullptr;
 
-static bool audioIsPlaying = false;
-static bool audioIsPaused = false;
-static char audioCurrentPathBuf[128] = {0};
+static AudioState audioState = {false, false, false, {0}};
 static float currentAudioGain = 0.85f;
 
 static bool audioIsPlaylist = false;
@@ -56,48 +54,38 @@ inline void ensureAudioStateMutex() {
 
 inline bool isAudioReady() { return (audioCommandQueue != nullptr && audioTaskHandle != nullptr); }
 
-inline AudioStateSnapshot getAudioSnapshot() {
+inline AudioState getAudioState() {
 	ensureAudioStateMutex();
-	AudioStateSnapshot snap;
-	snap.valid = false;
-	snap.isPlaying = false;
-	snap.isPaused = false;
-	snap.path[0] = '\0';
+	AudioState snap = {false, false, false, {0}};
 	if (audioStateMutex && xSemaphoreTake(audioStateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-		snap.valid = true;
-		snap.isPlaying = audioIsPlaying;
-		snap.isPaused = audioIsPaused;
-		strncpy(snap.path, audioCurrentPathBuf, sizeof(snap.path) - 1);
-		snap.path[sizeof(snap.path) - 1] = '\0';
+		snap = audioState;
 		xSemaphoreGive(audioStateMutex);
 	}
 	return snap;
 }
 
-inline void updateAudioState(bool playing, bool paused, const char *path) {
+inline void updateAudioState(bool playing, bool paused, bool starting, const char *path) {
 	ensureAudioStateMutex();
 	if (audioStateMutex && xSemaphoreTake(audioStateMutex, portMAX_DELAY) == pdTRUE) {
-		audioIsPlaying = playing;
-		audioIsPaused = paused;
+		audioState.isPlaying = playing;
+		audioState.isPaused = paused;
+		audioState.isStarting = starting;
 		if (path) {
-			strncpy(audioCurrentPathBuf, path, sizeof(audioCurrentPathBuf) - 1);
-			audioCurrentPathBuf[sizeof(audioCurrentPathBuf) - 1] = '\0';
+			strncpy(audioState.path, path, sizeof(audioState.path) - 1);
+			audioState.path[sizeof(audioState.path) - 1] = '\0';
 		} else {
-			audioCurrentPathBuf[0] = '\0';
+			audioState.path[0] = '\0';
 		}
 		xSemaphoreGive(audioStateMutex);
 	}
 }
 
 inline bool isAudioPathActive(const String &targetPath) {
-	AudioStateSnapshot snap = getAudioSnapshot();
-	if (!snap.valid) {
+	AudioState state = getAudioState();
+	if (!state.isPlaying && !state.isPaused && !state.isStarting) {
 		return false;
 	}
-	if (!snap.isPlaying && !snap.isPaused) {
-		return false;
-	}
-	String current(snap.path);
+	String current(state.path);
 	if (current.length() == 0) {
 		return false;
 	}
@@ -128,8 +116,7 @@ inline void stopPlaybackInternal() {
 	if (audioOut) {
 		audioOut->stop();
 	}
-	updateAudioState(false, false, "");
-	clearAudioPathReserved();
+	updateAudioState(false, false, false, "");
 }
 
 inline void stopAudioInternal() {
@@ -179,12 +166,12 @@ inline bool startTrackInternal(const char *path) {
 		return false;
 	}
 
-	setAudioPathReserved(path);
+	updateAudioState(false, false, true, path);
 
 	audioFile = new AudioFileSourceSD(path);
 	heapLog("startTrackInternal:after new AudioFileSourceSD");
 	if (!audioFile) {
-		clearAudioPathReserved();
+		updateAudioState(false, false, false, "");
 		return false;
 	}
 	audioMp3 = new AudioGeneratorMP3();
@@ -192,7 +179,7 @@ inline bool startTrackInternal(const char *path) {
 	if (!audioMp3) {
 		delete audioFile;
 		audioFile = nullptr;
-		clearAudioPathReserved();
+		updateAudioState(false, false, false, "");
 		return false;
 	}
 	if (!audioMp3->begin(audioFile, audioOut)) {
@@ -203,15 +190,14 @@ inline bool startTrackInternal(const char *path) {
 		audioFile->close();
 		delete audioFile;
 		audioFile = nullptr;
-		clearAudioPathReserved();
+		updateAudioState(false, false, false, "");
 		return false;
 	}
 	heapLog("startTrackInternal:after mp3 begin (playing)");
 
 	strncpy(audioCurrentTrack, path, sizeof(audioCurrentTrack) - 1);
 	audioCurrentTrack[sizeof(audioCurrentTrack) - 1] = '\0';
-	updateAudioState(true, false, path);
-	clearAudioPathReserved();
+	updateAudioState(true, false, false, path);
 	return true;
 }
 
@@ -289,13 +275,10 @@ inline void togglePlayInternal(const char *path) {
 	if (!audioOut) {
 		return;
 	}
-	AudioStateSnapshot snap = getAudioSnapshot();
-	if (!snap.valid) {
-		return;
-	}
+	AudioState state = getAudioState();
 	if (path && strlen(path) > 0) {
-		if (snap.isPlaying && strcmp(snap.path, path) == 0) {
-			bool newPaused = !snap.isPaused;
+		if (state.isPlaying && strcmp(state.path, path) == 0) {
+			bool newPaused = !state.isPaused;
 			if (newPaused) {
 				audioOut->stop();
 			} else {
@@ -304,7 +287,7 @@ inline void togglePlayInternal(const char *path) {
 					return;
 				}
 			}
-			updateAudioState(true, newPaused, snap.path);
+			updateAudioState(true, newPaused, false, state.path);
 			return;
 		}
 		audioIsPlaylist = false;
@@ -313,8 +296,8 @@ inline void togglePlayInternal(const char *path) {
 		startTrackInternal(path);
 		return;
 	}
-	if (snap.isPlaying) {
-		bool newPaused = !snap.isPaused;
+	if (state.isPlaying) {
+		bool newPaused = !state.isPaused;
 		if (newPaused) {
 			audioOut->stop();
 		} else {
@@ -323,13 +306,13 @@ inline void togglePlayInternal(const char *path) {
 				return;
 			}
 		}
-		updateAudioState(true, newPaused, snap.path);
+		updateAudioState(true, newPaused, false, state.path);
 	}
 }
 
 inline void handleAudioInternal() {
-	AudioStateSnapshot snap = getAudioSnapshot();
-	if (snap.valid && audioMp3 && audioMp3->isRunning() && !snap.isPaused) {
+	AudioState state = getAudioState();
+	if (audioMp3 && audioMp3->isRunning() && !state.isPaused) {
 		bool ok = false;
 		{
 			SdGuard sdGuard;

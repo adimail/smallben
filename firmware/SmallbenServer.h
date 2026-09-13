@@ -140,7 +140,7 @@ inline String extractJsonString(const String &json, const String &key) {
 inline void handleRoot() { streamDashboard(server); }
 
 inline void handleNow() {
-	AudioStateSnapshot audio = getAudioSnapshot();
+	AudioState audio = getAudioState();
 	RfidStateSnapshot rfid = getRfidSnapshot();
 
 	String pathStr(audio.path);
@@ -155,7 +155,7 @@ inline void handleNow() {
 	String stateStr = "stopped";
 	if (isBluetoothActive()) {
 		stateStr = isBluetoothConnected() ? "bluetooth_connected" : "bluetooth_pairing";
-	} else if (audio.valid && audio.isPlaying) {
+	} else if (audio.isPlaying) {
 		stateStr = audio.isPaused ? "paused" : "playing";
 	}
 
@@ -811,7 +811,7 @@ inline void handleApiPlaylistTracksUpdate() {
 		cur = endIdx + 1;
 
 		String tp = normalizePath(trackPath);
-		if (!isValidPath(tp) || !isMp3(tp) || !SD.exists(tp)) {
+		if (!isValidPath(tp) || !isMp3(tp)) {
 			ok = false;
 			break;
 		}
@@ -878,11 +878,11 @@ inline void handleApiPlayerToggle() {
 }
 
 inline void handleApiPlayerStatus() {
-	AudioStateSnapshot snap = getAudioSnapshot();
+	AudioState snap = getAudioState();
 	String state = "stopped";
 	if (isBluetoothActive()) {
 		state = isBluetoothConnected() ? "bluetooth_connected" : "bluetooth_pairing";
-	} else if (snap.valid && snap.isPlaying) {
+	} else if (snap.isPlaying) {
 		state = snap.isPaused ? "paused" : "playing";
 	}
 	server.send(200, "application/json",

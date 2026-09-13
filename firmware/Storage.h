@@ -31,7 +31,6 @@ static uint64_t g_cachedTotalBytes = 0;
 static uint64_t g_cachedUsedBytes = 0;
 static unsigned long g_lastSdStatsUpdate = 0;
 
-static char g_reservedAudioPath[128] = {0};
 static bool (*g_isAudioPathActiveCheck)(const String &path) = nullptr;
 
 inline void ensureSdMutex() {
@@ -62,25 +61,7 @@ inline bool isSdReady() { return g_sdReady; }
 
 inline void setAudioPathActiveChecker(bool (*fn)(const String &)) { g_isAudioPathActiveCheck = fn; }
 
-inline void setAudioPathReserved(const char *path) {
-	if (path) {
-		strncpy(g_reservedAudioPath, path, sizeof(g_reservedAudioPath) - 1);
-		g_reservedAudioPath[sizeof(g_reservedAudioPath) - 1] = '\0';
-	} else {
-		g_reservedAudioPath[0] = '\0';
-	}
-}
-
-inline void clearAudioPathReserved() { g_reservedAudioPath[0] = '\0'; }
-
 inline bool isAudioPathCurrentlyActive(const String &path) {
-	if (g_reservedAudioPath[0] != '\0') {
-		String reserved(g_reservedAudioPath);
-		if (reserved == path)
-			return true;
-		if (path != "/" && reserved.startsWith(path + "/"))
-			return true;
-	}
 	if (g_isAudioPathActiveCheck) {
 		return g_isAudioPathActiveCheck(path);
 	}
