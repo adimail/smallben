@@ -18,7 +18,8 @@ static int modeSwitchLastReading = HIGH;
 static unsigned long modeSwitchDebounceTime = 0;
 const unsigned long MODE_SWITCH_DEBOUNCE_MS = 50;
 
-static int lastPotVal = -100;
+static int smoothedPotVal = -1;
+static int lastAppliedPotVal = -1;
 static unsigned long lastPotSampleTime = 0;
 const unsigned long POT_SAMPLE_INTERVAL_MS = 50;
 
@@ -31,28 +32,57 @@ const unsigned long LONG_PRESS_DURATION_MS = 800;
 
 inline PlaybackMode getCurrentMode() { return currentMode; }
 
+inline int readAveragedPot() {
+	long sum = 0;
+	for (int i = 0; i < 16; i++) {
+		sum += analogRead(VOLUME_POT_PIN);
+	}
+	return (int)(sum / 16);
+}
+
 inline void applyPotVolume(int raw = -1) {
+	if (currentMode != PlaybackMode::Disc) {
+		return;
+	}
 	if (raw < 0) {
-		raw = analogRead(VOLUME_POT_PIN);
+		raw = readAveragedPot();
 	}
-	lastPotVal = raw;
-	if (currentMode == PlaybackMode::Bluetooth) {
-		setBluetoothVolume(raw / 32);
-	} else {
-		requestAudioVolume((float)raw / 4095.0f);
+	if (raw < 40) {
+		raw = 0;
+	} else if (raw > 4055) {
+		raw = 4095;
 	}
+	lastAppliedPotVal = raw;
+	requestAudioVolume((float)raw / 4095.0f);
 }
 
 inline void handleVolume() {
+	if (currentMode != PlaybackMode::Disc) {
+		return;
+	}
 	unsigned long now = millis();
 	if (now - lastPotSampleTime < POT_SAMPLE_INTERVAL_MS) {
 		return;
 	}
 	lastPotSampleTime = now;
 
-	int raw = analogRead(VOLUME_POT_PIN);
-	if (abs(raw - lastPotVal) > 30) {
-		applyPotVolume(raw);
+	int raw = readAveragedPot();
+	if (smoothedPotVal < 0) {
+		smoothedPotVal = raw;
+	} else {
+		smoothedPotVal = (smoothedPotVal * 7 + raw) / 8;
+	}
+
+	int candidate = smoothedPotVal;
+	if (candidate < 40) {
+		candidate = 0;
+	} else if (candidate > 4055) {
+		candidate = 4095;
+	}
+
+	if (abs(candidate - lastAppliedPotVal) > 60 || (candidate == 0 && lastAppliedPotVal != 0) ||
+		(candidate == 4095 && lastAppliedPotVal != 4095)) {
+		applyPotVolume(candidate);
 	}
 }
 
@@ -83,9 +113,9 @@ inline void applyMode(PlaybackMode mode) {
 		requestAudioReclaimI2SBlocking();
 		setRfidEnabled(true);
 		currentMode = PlaybackMode::Disc;
+		applyPotVolume();
 		heapLog("applyMode:now in Disc");
 	}
-	applyPotVolume();
 }
 
 inline void handleModeSwitch() {
