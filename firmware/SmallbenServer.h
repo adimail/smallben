@@ -8,6 +8,7 @@
 #include <Arduino.h>
 #include <WebServer.h>
 #include <WiFi.h>
+#include <cJSON.h>
 
 WebServer server(HTTP_PORT);
 
@@ -17,39 +18,6 @@ static String uploadError = "";
 static size_t uploadBytesWritten = 0;
 static String uploadFinalPath = "";
 static String uploadTempPath = "";
-
-inline void sendStorageResult(StorageResult res, const String &successMsg = "{\"status\":\"ok\"}") {
-	switch (res) {
-	case StorageResult::Ok:
-		server.send(200, "application/json", successMsg);
-		break;
-	case StorageResult::NotFound:
-		server.send(404, "application/json", "{\"error\":\"not found\"}");
-		break;
-	case StorageResult::AlreadyExists:
-		server.send(409, "application/json", "{\"error\":\"already exists\"}");
-		break;
-	case StorageResult::InvalidPath:
-		server.send(400, "application/json", "{\"error\":\"invalid path or name\"}");
-		break;
-	case StorageResult::Protected:
-		server.send(403, "application/json", "{\"error\":\"path is protected\"}");
-		break;
-	case StorageResult::Active:
-		server.send(409, "application/json",
-					"{\"error\":\"item is currently active in playback\"}");
-		break;
-	case StorageResult::NoSpace:
-		server.send(507, "application/json", "{\"error\":\"storage full\"}");
-		break;
-	case StorageResult::StorageUnavailable:
-		server.send(503, "application/json", "{\"error\":\"SD card unavailable\"}");
-		break;
-	default:
-		server.send(500, "application/json", "{\"error\":\"storage operation failed\"}");
-		break;
-	}
-}
 
 inline String jsonEscape(const String &in) {
 	String out;
@@ -92,46 +60,44 @@ inline String jsonEscape(const String &in) {
 	return out;
 }
 
-inline String extractJsonString(const String &json, const String &key) {
-	String needle = "\"" + key + "\"";
-	int kpos = json.indexOf(needle);
-	if (kpos == -1)
-		return "";
-	int colon = json.indexOf(':', kpos + needle.length());
-	if (colon == -1)
-		return "";
-	int q1 = json.indexOf('"', colon + 1);
-	if (q1 == -1)
-		return "";
-	String result = "";
-	bool escape = false;
-	for (int i = q1 + 1; i < (int)json.length(); i++) {
-		char c = json[i];
-		if (escape) {
-			if (c == '"' || c == '\\' || c == '/')
-				result += c;
-			else if (c == 'b')
-				result += '\b';
-			else if (c == 'f')
-				result += '\f';
-			else if (c == 'n')
-				result += '\n';
-			else if (c == 'r')
-				result += '\r';
-			else if (c == 't')
-				result += '\t';
-			else
-				result += c;
-			escape = false;
-		} else if (c == '\\') {
-			escape = true;
-		} else if (c == '"') {
-			return result;
-		} else {
-			result += c;
-		}
+inline void sendJson(int code, const String &body) { server.send(code, "application/json", body); }
+
+inline void sendJsonOk() { sendJson(200, "{\"status\":\"ok\"}"); }
+
+inline void sendJsonError(int code, const String &msg) {
+	sendJson(code, "{\"error\":\"" + jsonEscape(msg) + "\"}");
+}
+
+inline void sendStorageResult(StorageResult res, const String &successMsg = "{\"status\":\"ok\"}") {
+	switch (res) {
+	case StorageResult::Ok:
+		sendJson(200, successMsg);
+		break;
+	case StorageResult::NotFound:
+		sendJsonError(404, "not found");
+		break;
+	case StorageResult::AlreadyExists:
+		sendJsonError(409, "already exists");
+		break;
+	case StorageResult::InvalidPath:
+		sendJsonError(400, "invalid path or name");
+		break;
+	case StorageResult::Protected:
+		sendJsonError(403, "path is protected");
+		break;
+	case StorageResult::Active:
+		sendJsonError(409, "item is currently active in playback");
+		break;
+	case StorageResult::NoSpace:
+		sendJsonError(507, "storage full");
+		break;
+	case StorageResult::StorageUnavailable:
+		sendJsonError(503, "SD card unavailable");
+		break;
+	default:
+		sendJsonError(500, "storage operation failed");
+		break;
 	}
-	return "";
 }
 
 inline void handleRoot() { streamDashboard(server); }
@@ -182,12 +148,12 @@ inline void handleNow() {
 	json += "}";
 	json += "}";
 
-	server.send(200, "application/json", json);
+	sendJson(200, json);
 }
 
 inline void handleApiDiscsGet() {
 	server.setContentLength(CONTENT_LENGTH_UNKNOWN);
-	server.send(200, "application/json", "");
+	sendJson(200, "");
 	server.sendContent("[");
 	bool first = true;
 	File f;
@@ -234,15 +200,34 @@ inline void handleApiDiscsGet() {
 
 inline void handleApiDiscsMap() {
 	heapLog("handleApiDiscsMap:enter");
-	if (server.hasArg("plain") && server.arg("plain").length() > MAX_JSON_BODY_SIZE) {
-		server.send(413, "application/json", "{\"error\":\"payload too large\"}");
-		return;
+	String uid = server.arg("uid");
+	String type = server.arg("type");
+	String target = server.arg("target");
+	String label = server.arg("label");
+
+	if (server.hasArg("plain")) {
+		if (server.arg("plain").length() > MAX_JSON_BODY_SIZE) {
+			sendJsonError(413, "payload too large");
+			return;
+		}
+		cJSON *root = cJSON_Parse(server.arg("plain").c_str());
+		if (root) {
+			cJSON *item;
+			if ((item = cJSON_GetObjectItem(root, "uid")) && cJSON_IsString(item) &&
+				item->valuestring)
+				uid = item->valuestring;
+			if ((item = cJSON_GetObjectItem(root, "type")) && cJSON_IsString(item) &&
+				item->valuestring)
+				type = item->valuestring;
+			if ((item = cJSON_GetObjectItem(root, "target")) && cJSON_IsString(item) &&
+				item->valuestring)
+				target = item->valuestring;
+			if ((item = cJSON_GetObjectItem(root, "label")) && cJSON_IsString(item) &&
+				item->valuestring)
+				label = item->valuestring;
+			cJSON_Delete(root);
+		}
 	}
-	String body = server.arg("plain");
-	String uid = extractJsonString(body, "uid");
-	String type = extractJsonString(body, "type");
-	String target = extractJsonString(body, "target");
-	String label = extractJsonString(body, "label");
 
 	StorageResult res = mapDisc(uid, type, target, label);
 	heapLog("handleApiDiscsMap:after mapDisc");
@@ -251,15 +236,20 @@ inline void handleApiDiscsMap() {
 
 inline void handleApiDiscsDelete() {
 	heapLog("handleApiDiscsDelete:enter");
-	String uid = "";
-	if (server.hasArg("uid")) {
-		uid = server.arg("uid");
-	} else if (server.hasArg("plain")) {
+	String uid = server.arg("uid");
+	if (uid.length() == 0 && server.hasArg("plain")) {
 		if (server.arg("plain").length() > MAX_JSON_BODY_SIZE) {
-			server.send(413, "application/json", "{\"error\":\"payload too large\"}");
+			sendJsonError(413, "payload too large");
 			return;
 		}
-		uid = extractJsonString(server.arg("plain"), "uid");
+		cJSON *root = cJSON_Parse(server.arg("plain").c_str());
+		if (root) {
+			cJSON *item = cJSON_GetObjectItem(root, "uid");
+			if (cJSON_IsString(item) && item->valuestring) {
+				uid = item->valuestring;
+			}
+			cJSON_Delete(root);
+		}
 	}
 	StorageResult res = unmapDisc(uid);
 	heapLog("handleApiDiscsDelete:after unmapDisc");
@@ -323,11 +313,11 @@ inline void streamMp3Entries(const String &dirPath, bool &first) {
 inline void handleApiMp3() {
 	heapLog("handleApiMp3:enter");
 	if (!isStorageReady()) {
-		server.send(503, "application/json", "[]");
+		sendJson(503, "[]");
 		return;
 	}
 	server.setContentLength(CONTENT_LENGTH_UNKNOWN);
-	server.send(200, "application/json", "");
+	sendJson(200, "");
 	server.sendContent("[");
 	bool first = true;
 	streamMp3Entries("/", first);
@@ -338,16 +328,17 @@ inline void handleApiMp3() {
 
 inline void handleApiTrackPlaylists() {
 	if (!server.hasArg("path")) {
-		server.send(400, "application/json", "{\"error\":\"missing path\"}");
+		sendJsonError(400, "missing path");
 		return;
 	}
 	String path = server.arg("path");
 	if (!isValidPath(path)) {
-		server.send(400, "application/json", "{\"error\":\"invalid path\"}");
+		sendJsonError(400, "invalid path");
 		return;
 	}
+
 	server.setContentLength(CONTENT_LENGTH_UNKNOWN);
-	server.send(200, "application/json", "");
+	sendJson(200, "");
 	server.sendContent("[");
 	bool first = true;
 
@@ -419,7 +410,7 @@ inline void handleApiTree() {
 	if (server.hasArg("path"))
 		path = server.arg("path");
 	if (!isValidPath(path)) {
-		server.send(400, "application/json", "{\"error\":\"invalid path\"}");
+		sendJsonError(400, "invalid path");
 		return;
 	}
 
@@ -430,13 +421,13 @@ inline void handleApiTree() {
 		if (!dir || !dir.isDirectory()) {
 			if (dir)
 				dir.close();
-			server.send(404, "application/json", "[]");
+			sendJson(404, "[]");
 			return;
 		}
 	}
 
 	server.setContentLength(CONTENT_LENGTH_UNKNOWN);
-	server.send(200, "application/json", "");
+	sendJson(200, "");
 	server.sendContent("[");
 	bool first = true;
 
@@ -487,18 +478,23 @@ inline void handleApiTree() {
 
 inline void handleApiFolderCreate() {
 	heapLog("handleApiFolderCreate:enter");
-	String path = "";
-	if (server.hasArg("path")) {
-		path = server.arg("path");
-	} else if (server.hasArg("plain")) {
+	String path = server.arg("path");
+	if (path.length() == 0 && server.hasArg("plain")) {
 		if (server.arg("plain").length() > MAX_JSON_BODY_SIZE) {
-			server.send(413, "application/json", "{\"error\":\"payload too large\"}");
+			sendJsonError(413, "payload too large");
 			return;
 		}
-		path = extractJsonString(server.arg("plain"), "path");
+		cJSON *root = cJSON_Parse(server.arg("plain").c_str());
+		if (root) {
+			cJSON *item = cJSON_GetObjectItem(root, "path");
+			if (cJSON_IsString(item) && item->valuestring) {
+				path = item->valuestring;
+			}
+			cJSON_Delete(root);
+		}
 	}
 	if (path.length() == 0) {
-		server.send(400, "application/json", "{\"error\":\"missing path\"}");
+		sendJsonError(400, "missing path");
 		return;
 	}
 	StorageResult res = createDirectory(path);
@@ -509,7 +505,7 @@ inline void handleApiFolderCreate() {
 inline void handleApiDelete() {
 	heapLog("handleApiDelete:enter");
 	if (!server.hasArg("path")) {
-		server.send(400, "application/json", "{\"error\":\"missing path\"}");
+		sendJsonError(400, "missing path");
 		return;
 	}
 	String path = server.arg("path");
@@ -724,19 +720,19 @@ inline void handleFileUploadProcess() {
 inline void handleFileUploadResponse() {
 	if (uploadAborted) {
 		String err = uploadError.length() > 0 ? uploadError : "UPLOAD_FAILED";
-		server.send(400, "application/json", "{\"status\":\"error\",\"error\":\"" + err + "\"}");
+		sendJson(400, "{\"status\":\"error\",\"error\":\"" + jsonEscape(err) + "\"}");
 	} else {
-		server.send(200, "application/json", "{\"status\":\"ok\"}");
+		sendJsonOk();
 	}
 }
 
 inline void handleApiPlaylistsGet() {
 	if (!isStorageReady()) {
-		server.send(503, "application/json", "[]");
+		sendJson(503, "[]");
 		return;
 	}
 	server.setContentLength(CONTENT_LENGTH_UNKNOWN);
-	server.send(200, "application/json", "");
+	sendJson(200, "");
 	server.sendContent("[");
 	bool first = true;
 
@@ -803,12 +799,21 @@ inline void handleApiPlaylistsGet() {
 
 inline void handleApiPlaylistsPost() {
 	heapLog("handleApiPlaylistsPost:enter");
-	if (server.hasArg("plain") && server.arg("plain").length() > MAX_JSON_BODY_SIZE) {
-		server.send(413, "application/json", "{\"error\":\"payload too large\"}");
-		return;
+	String name = server.arg("name");
+	if (name.length() == 0 && server.hasArg("plain")) {
+		if (server.arg("plain").length() > MAX_JSON_BODY_SIZE) {
+			sendJsonError(413, "payload too large");
+			return;
+		}
+		cJSON *root = cJSON_Parse(server.arg("plain").c_str());
+		if (root) {
+			cJSON *item = cJSON_GetObjectItem(root, "name");
+			if (cJSON_IsString(item) && item->valuestring) {
+				name = item->valuestring;
+			}
+			cJSON_Delete(root);
+		}
 	}
-	String body = server.arg("plain");
-	String name = extractJsonString(body, "name");
 	StorageResult res = createPlaylist(name);
 	heapLog("handleApiPlaylistsPost:after createPlaylist");
 	sendStorageResult(res);
@@ -823,7 +828,7 @@ inline void handleApiPlaylistTracksGet() {
 		id = urldecode(uri.substring(prefix.length(), trackSuffix));
 	}
 	if (!isValidPlaylistName(id)) {
-		server.send(400, "application/json", "{\"error\":\"invalid id\"}");
+		sendJsonError(400, "invalid id");
 		return;
 	}
 
@@ -832,18 +837,18 @@ inline void handleApiPlaylistTracksGet() {
 	{
 		SdGuard guard;
 		if (!isStorageReady() || !SD.exists(path)) {
-			server.send(404, "application/json", "{\"error\":\"not found\"}");
+			sendJsonError(404, "not found");
 			return;
 		}
 		f = SD.open(path, FILE_READ);
 		if (!f) {
-			server.send(404, "application/json", "{\"error\":\"not found\"}");
+			sendJsonError(404, "not found");
 			return;
 		}
 	}
 
 	server.setContentLength(CONTENT_LENGTH_UNKNOWN);
-	server.send(200, "application/json", "");
+	sendJson(200, "");
 	server.sendContent("[");
 	bool first = true;
 
@@ -896,31 +901,29 @@ inline void handleApiPlaylistTracksGet() {
 
 inline void handleApiPlaylistTracksUpdate() {
 	heapLog("handleApiPlaylistTracksUpdate:enter");
-	if (!server.hasArg("id")) {
-		server.send(400, "application/json", "{\"error\":\"missing id\"}");
-		return;
-	}
-	if (server.hasArg("plain") && server.arg("plain").length() > MAX_JSON_BODY_SIZE) {
-		server.send(413, "application/json", "{\"error\":\"payload too large\"}");
-		return;
-	}
 	String id = urldecode(server.arg("id"));
 	if (!isValidPlaylistName(id)) {
-		server.send(400, "application/json", "{\"error\":\"invalid id\"}");
+		sendJsonError(400, "invalid id");
+		return;
+	}
+	if (!server.hasArg("plain")) {
+		sendJsonError(400, "missing tracks");
+		return;
+	}
+	if (server.arg("plain").length() > MAX_JSON_BODY_SIZE) {
+		sendJsonError(413, "payload too large");
 		return;
 	}
 
-	String body = server.arg("plain");
-	String needle = "\"tracks\"";
-	int kpos = body.indexOf(needle);
-	if (kpos == -1) {
-		server.send(400, "application/json", "{\"error\":\"missing tracks\"}");
+	cJSON *root = cJSON_Parse(server.arg("plain").c_str());
+	if (!root) {
+		sendJsonError(400, "invalid json");
 		return;
 	}
-	int b1 = body.indexOf('[', kpos + needle.length());
-	int b2 = body.lastIndexOf(']');
-	if (b1 == -1 || b2 == -1 || b2 <= b1) {
-		server.send(400, "application/json", "{\"error\":\"invalid tracks format\"}");
+	cJSON *tracks = cJSON_GetObjectItem(root, "tracks");
+	if (!cJSON_IsArray(tracks)) {
+		cJSON_Delete(root);
+		sendJsonError(400, "missing tracks");
 		return;
 	}
 
@@ -933,39 +936,20 @@ inline void handleApiPlaylistTracksUpdate() {
 	}
 	File outF = SD.open(tempPath, FILE_WRITE);
 	if (!outF) {
-		server.send(500, "application/json", "{\"error\":\"open failed\"}");
+		cJSON_Delete(root);
+		sendJsonError(500, "open failed");
 		return;
 	}
 
-	int cur = b1 + 1;
-	size_t count = 0;
 	bool ok = true;
-	while (cur < b2) {
-		int q1 = body.indexOf('"', cur);
-		if (q1 == -1 || q1 >= b2)
+	size_t count = 0;
+	cJSON *elem = nullptr;
+	cJSON_ArrayForEach(elem, tracks) {
+		if (!cJSON_IsString(elem) || !elem->valuestring) {
+			ok = false;
 			break;
-		String trackPath = "";
-		bool escape = false;
-		int endIdx = -1;
-		for (int i = q1 + 1; i < b2; i++) {
-			char c = body[i];
-			if (escape) {
-				trackPath += c;
-				escape = false;
-			} else if (c == '\\') {
-				escape = true;
-			} else if (c == '"') {
-				endIdx = i;
-				break;
-			} else {
-				trackPath += c;
-			}
 		}
-		if (endIdx == -1)
-			break;
-		cur = endIdx + 1;
-
-		String tp = normalizePath(trackPath);
+		String tp = normalizePath(String(elem->valuestring));
 		if (!isValidPath(tp) || !isMp3(tp)) {
 			ok = false;
 			break;
@@ -978,10 +962,11 @@ inline void handleApiPlaylistTracksUpdate() {
 	}
 
 	outF.close();
+	cJSON_Delete(root);
 
 	if (!ok) {
 		SD.remove(tempPath);
-		server.send(400, "application/json", "{\"error\":\"invalid track list\"}");
+		sendJsonError(400, "invalid track list");
 		return;
 	}
 
@@ -991,44 +976,54 @@ inline void handleApiPlaylistTracksUpdate() {
 }
 
 inline void handleApiPlaylistTracksAppend() {
-	if (!server.hasArg("id")) {
-		server.send(400, "application/json", "{\"error\":\"missing id\"}");
-		return;
-	}
-	if (server.hasArg("plain") && server.arg("plain").length() > MAX_JSON_BODY_SIZE) {
-		server.send(413, "application/json", "{\"error\":\"payload too large\"}");
-		return;
-	}
 	String id = urldecode(server.arg("id"));
-	String body = server.arg("plain");
-	String path = extractJsonString(body, "path");
+	String path = server.arg("path");
+	if (path.length() == 0 && server.hasArg("plain")) {
+		if (server.arg("plain").length() > MAX_JSON_BODY_SIZE) {
+			sendJsonError(413, "payload too large");
+			return;
+		}
+		cJSON *root = cJSON_Parse(server.arg("plain").c_str());
+		if (root) {
+			cJSON *item = cJSON_GetObjectItem(root, "path");
+			if (cJSON_IsString(item) && item->valuestring) {
+				path = item->valuestring;
+			}
+			cJSON_Delete(root);
+		}
+	}
 	StorageResult res = appendPlaylistTrack(id, path);
 	sendStorageResult(res);
 }
 
 inline void handleApiPlayerToggle() {
 	if (isBluetoothActive()) {
-		server.send(403, "application/json", "{\"error\":\"device in bluetooth mode\"}");
+		sendJsonError(403, "device in bluetooth mode");
 		return;
 	}
-	String path = "";
-	if (server.hasArg("path")) {
-		path = server.arg("path");
-	} else if (server.hasArg("plain")) {
+	String path = server.arg("path");
+	if (path.length() == 0 && server.hasArg("plain")) {
 		if (server.arg("plain").length() > MAX_JSON_BODY_SIZE) {
-			server.send(413, "application/json", "{\"error\":\"payload too large\"}");
+			sendJsonError(413, "payload too large");
 			return;
 		}
-		path = extractJsonString(server.arg("plain"), "path");
+		cJSON *root = cJSON_Parse(server.arg("plain").c_str());
+		if (root) {
+			cJSON *item = cJSON_GetObjectItem(root, "path");
+			if (cJSON_IsString(item) && item->valuestring) {
+				path = item->valuestring;
+			}
+			cJSON_Delete(root);
+		}
 	}
 	if (path.length() == 0 || !isValidPath(path) || !isMp3(path)) {
-		server.send(400, "application/json", "{\"error\":\"invalid path\"}");
+		sendJsonError(400, "invalid path");
 		return;
 	}
 	if (requestAudioToggle(path)) {
-		server.send(200, "application/json", "{\"status\":\"ok\"}");
+		sendJsonOk();
 	} else {
-		server.send(500, "application/json", "{\"error\":\"playback request failed\"}");
+		sendJsonError(500, "playback request failed");
 	}
 }
 
@@ -1040,9 +1035,8 @@ inline void handleApiPlayerStatus() {
 	} else if (snap.isPlaying) {
 		state = snap.isPaused ? "paused" : "playing";
 	}
-	server.send(200, "application/json",
-				"{\"status\":\"ok\",\"state\":\"" + state + "\",\"path\":\"" +
-					jsonEscape(String(snap.path)) + "\"}");
+	sendJson(200, "{\"status\":\"ok\",\"state\":\"" + state + "\",\"path\":\"" +
+					  jsonEscape(String(snap.path)) + "\"}");
 }
 
 inline void handleDynamicPlaylists() {
@@ -1056,28 +1050,37 @@ inline void handleDynamicPlaylists() {
 	if (uri.startsWith(prefix)) {
 		String id = urldecode(uri.substring(prefix.length()));
 		if (!isValidPlaylistName(id)) {
-			server.send(400, "application/json", "{\"error\":\"invalid id\"}");
+			sendJsonError(400, "invalid id");
 			return;
 		}
 		if (method == HTTP_PUT) {
-			if (server.hasArg("plain") && server.arg("plain").length() > MAX_JSON_BODY_SIZE) {
-				server.send(413, "application/json", "{\"error\":\"payload too large\"}");
-				return;
+			String newName = server.arg("newName");
+			if (newName.length() == 0 && server.hasArg("plain")) {
+				if (server.arg("plain").length() > MAX_JSON_BODY_SIZE) {
+					sendJsonError(413, "payload too large");
+					return;
+				}
+				cJSON *root = cJSON_Parse(server.arg("plain").c_str());
+				if (root) {
+					cJSON *item = cJSON_GetObjectItem(root, "newName");
+					if (cJSON_IsString(item) && item->valuestring) {
+						newName = item->valuestring;
+					}
+					cJSON_Delete(root);
+				}
 			}
-			String body = server.arg("plain");
-			String newName = extractJsonString(body, "newName");
 			if (!isValidPlaylistName(newName)) {
-				server.send(400, "application/json", "{\"error\":\"invalid newName\"}");
+				sendJsonError(400, "invalid newName");
 				return;
 			}
 			StorageResult res = renamePlaylist(id, newName);
 			if (res == StorageResult::Ok) {
 				if (!cascadeRenamePlaylist(id, newName)) {
 					renamePlaylist(newName, id);
-					server.send(500, "application/json", "{\"error\":\"mapping cascade failed\"}");
+					sendJsonError(500, "mapping cascade failed");
 					return;
 				}
-				server.send(200, "application/json", "{\"status\":\"ok\"}");
+				sendJsonOk();
 			} else {
 				sendStorageResult(res);
 			}
@@ -1087,14 +1090,14 @@ inline void handleDynamicPlaylists() {
 			StorageResult res = deletePlaylist(id);
 			if (res == StorageResult::Ok) {
 				cascadeDeletePlaylist(id);
-				server.send(200, "application/json", "{\"status\":\"ok\"}");
+				sendJsonOk();
 			} else {
 				sendStorageResult(res);
 			}
 			return;
 		}
 	}
-	server.send(404, "application/json", "{\"error\":\"not found\"}");
+	sendJsonError(404, "not found");
 }
 
 inline void initServer() {
