@@ -55,26 +55,33 @@ inline void handleVolume() {
 }
 
 inline void applyMode(PlaybackMode mode) {
+	heapLog("applyMode:enter");
 	if (mode == PlaybackMode::Bluetooth) {
 		disableWiFi();
+		heapLog("applyMode:after disableWiFi");
 		setRfidEnabled(false);
 		requestAudioStop();
 		requestAudioReleaseI2SBlocking();
+		heapLog("applyMode:after releaseI2S");
 		vTaskDelay(pdMS_TO_TICKS(100));
 		if (!startBluetooth()) {
 			requestAudioReclaimI2SBlocking();
 			setRfidEnabled(true);
 			currentMode = PlaybackMode::Disc;
 			applyPotVolume();
+			heapLog("applyMode:BT start FAILED, reverted to Disc");
 			return;
 		}
 		currentMode = PlaybackMode::Bluetooth;
+		heapLog("applyMode:now in Bluetooth");
 	} else {
 		stopBluetooth();
+		heapLog("applyMode:after stopBluetooth");
 		vTaskDelay(pdMS_TO_TICKS(50));
 		requestAudioReclaimI2SBlocking();
 		setRfidEnabled(true);
 		currentMode = PlaybackMode::Disc;
+		heapLog("applyMode:now in Disc");
 	}
 	applyPotVolume();
 }
@@ -180,4 +187,13 @@ inline void handleControls() {
 	handleVolume();
 	handleModeSwitch();
 	handleButton();
+
+	static bool lastBtConnected = false;
+	if (currentMode == PlaybackMode::Bluetooth) {
+		bool nowConnected = isBluetoothConnected();
+		if (nowConnected != lastBtConnected) {
+			lastBtConnected = nowConnected;
+			heapLog(nowConnected ? "BT client CONNECTED" : "BT client DISCONNECTED");
+		}
+	}
 }

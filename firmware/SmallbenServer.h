@@ -251,6 +251,7 @@ inline void handleApiDiscsGet() {
 }
 
 inline void handleApiDiscsMap() {
+	heapLog("handleApiDiscsMap:enter");
 	if (server.hasArg("plain") && server.arg("plain").length() > MAX_JSON_BODY_SIZE) {
 		server.send(413, "application/json", "{\"error\":\"payload too large\"}");
 		return;
@@ -262,6 +263,7 @@ inline void handleApiDiscsMap() {
 	String label = extractJsonString(body, "label");
 
 	StorageResult res = mapDisc(uid, type, target, label);
+	heapLog("handleApiDiscsMap:after mapDisc");
 	sendStorageResult(res);
 }
 
@@ -458,6 +460,7 @@ inline void handleApiTree() {
 }
 
 inline void handleApiFolderCreate() {
+	heapLog("handleApiFolderCreate:enter");
 	String path = "";
 	if (server.hasArg("path")) {
 		path = server.arg("path");
@@ -473,16 +476,19 @@ inline void handleApiFolderCreate() {
 		return;
 	}
 	StorageResult res = createDirectory(path);
+	heapLog("handleApiFolderCreate:after createDirectory");
 	sendStorageResult(res);
 }
 
 inline void handleApiDelete() {
+	heapLog("handleApiDelete:enter");
 	if (!server.hasArg("path")) {
 		server.send(400, "application/json", "{\"error\":\"missing path\"}");
 		return;
 	}
 	String path = server.arg("path");
 	StorageResult res = deleteStoragePath(path);
+	heapLog("handleApiDelete:after deleteStoragePath");
 	sendStorageResult(res);
 }
 
@@ -555,6 +561,7 @@ inline void handleApiDownload() {
 inline void handleFileUploadProcess() {
 	HTTPUpload &upload = server.upload();
 	if (upload.status == UPLOAD_FILE_START) {
+		heapLog("upload:START");
 		uploadAborted = false;
 		uploadError = "";
 		uploadBytesWritten = 0;
@@ -613,6 +620,10 @@ inline void handleFileUploadProcess() {
 			uploadError = "TEMP_OPEN_FAILED";
 		}
 	} else if (upload.status == UPLOAD_FILE_WRITE) {
+		static int writeCount = 0;
+		if ((writeCount++ % 20) == 0) { // don't flood serial every single chunk
+			heapLog("upload:WRITE tick");
+		}
 		if (!uploadAborted && uploadFile) {
 			uploadBytesWritten += upload.currentSize;
 			if (uploadBytesWritten > MAX_UPLOAD_SIZE) {
@@ -638,6 +649,7 @@ inline void handleFileUploadProcess() {
 				SdGuard guard;
 				size_t written = uploadFile.write(upload.buf, upload.currentSize);
 				if (written != upload.currentSize) {
+					heapLog("upload:WRITE_FAILED point");
 					uploadAborted = true;
 					uploadError = "WRITE_FAILED";
 					uploadFile.close();
@@ -648,6 +660,7 @@ inline void handleFileUploadProcess() {
 			}
 		}
 	} else if (upload.status == UPLOAD_FILE_END) {
+		heapLog("upload:END before commit");
 		if (uploadFile) {
 			SdGuard guard;
 			uploadFile.close();
@@ -655,6 +668,7 @@ inline void handleFileUploadProcess() {
 		if (!uploadAborted) {
 			StorageResult res =
 				commitUploadFile(uploadTempPath, uploadFinalPath, uploadBytesWritten);
+			heapLog("upload:END after commit");
 			if (res != StorageResult::Ok) {
 				uploadAborted = true;
 				uploadError = "COMMIT_FAILED";
@@ -748,6 +762,7 @@ inline void handleApiPlaylistsGet() {
 }
 
 inline void handleApiPlaylistsPost() {
+	heapLog("handleApiPlaylistsPost:enter");
 	if (server.hasArg("plain") && server.arg("plain").length() > MAX_JSON_BODY_SIZE) {
 		server.send(413, "application/json", "{\"error\":\"payload too large\"}");
 		return;
@@ -755,6 +770,7 @@ inline void handleApiPlaylistsPost() {
 	String body = server.arg("plain");
 	String name = extractJsonString(body, "name");
 	StorageResult res = createPlaylist(name);
+	heapLog("handleApiPlaylistsPost:after createPlaylist");
 	sendStorageResult(res);
 }
 
@@ -791,6 +807,7 @@ inline void handleApiPlaylistTracksGet() {
 }
 
 inline void handleApiPlaylistTracksUpdate() {
+	heapLog("handleApiPlaylistTracksUpdate:enter");
 	if (!server.hasArg("id")) {
 		server.send(400, "application/json", "{\"error\":\"missing id\"}");
 		return;
@@ -803,6 +820,7 @@ inline void handleApiPlaylistTracksUpdate() {
 	String body = server.arg("plain");
 	std::vector<String> tracks = extractJsonArray(body, "tracks");
 	StorageResult res = overwritePlaylistTracks(id, tracks);
+	heapLog("handleApiPlaylistTracksUpdate:after overwrite");
 	sendStorageResult(res);
 }
 

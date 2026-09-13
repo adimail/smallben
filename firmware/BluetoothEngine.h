@@ -15,22 +15,29 @@ inline bool initBluetooth() {
 }
 
 inline bool startBluetooth() {
+	heapLog("startBluetooth:enter");
 	if (btRunning)
 		return true;
 	if (!initBluetooth()) {
+		heapLog("startBluetooth:i2s init FAILED");
 		return false;
 	}
+	heapLog("startBluetooth:after i2s init");
 	a2dp_sink.start(BT_DEVICE_NAME);
 	btRunning = true;
+	heapLog("startBluetooth:after a2dp start");
 	return true;
 }
 
 inline void stopBluetooth() {
+	heapLog("stopBluetooth:enter");
 	if (!btRunning)
 		return;
-	a2dp_sink.end(false);
+	a2dp_sink.end(true);
+	heapLog("stopBluetooth:after a2dp end (true)");
 	i2s.end();
 	btRunning = false;
+	heapLog("stopBluetooth:after i2s end");
 }
 
 inline bool isBluetoothActive() { return btRunning; }
@@ -47,9 +54,12 @@ inline void toggleBluetoothPlayback() {
 	if (!btRunning || !a2dp_sink.is_connected()) {
 		return;
 	}
+	heapLog("BT:toggle playback enter");
 	if (a2dp_sink.get_audio_state() == ESP_A2D_AUDIO_STATE_STARTED) {
 		a2dp_sink.pause();
+		heapLog("BT:paused");
 	} else {
 		a2dp_sink.play();
+		heapLog("BT:play");
 	}
 }

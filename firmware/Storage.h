@@ -528,6 +528,7 @@ inline StorageResult replaceFileSafelyUnderGuard(const String &tempPath, const S
 }
 
 inline StorageResult writeTextAtomic(const String &destPath, const String &content) {
+	heapLog("writeTextAtomic:enter");
 	if (!g_sdReady)
 		return StorageResult::StorageUnavailable;
 	String dst = normalizePath(destPath);
@@ -549,17 +550,20 @@ inline StorageResult writeTextAtomic(const String &destPath, const String &conte
 	}
 	File f = SD.open(tempPath, FILE_WRITE);
 	if (!f) {
+		heapLog("writeTextAtomic:OPEN FAILED");
 		return StorageResult::OpenFailed;
 	}
 	if (content.length() > 0) {
 		size_t written = f.print(content);
 		if (written != content.length()) {
+			heapLog("writeTextAtomic:WRITE FAILED");
 			f.close();
 			SD.remove(tempPath);
 			return StorageResult::WriteFailed;
 		}
 	}
 	f.close();
+	heapLog("writeTextAtomic:after write+close");
 
 	File verifyF = SD.open(tempPath, FILE_READ);
 	if (!verifyF) {

@@ -144,6 +144,7 @@ inline StorageResult commitMappingsAtomically(const std::map<String, DiscMapping
 
 inline StorageResult mapDisc(const String &rawUid, const String &rawType, const String &rawTarget,
 							 const String &rawLabel) {
+	heapLog("mapDisc:enter");
 	if (!isStorageReady()) {
 		return StorageResult::StorageUnavailable;
 	}
@@ -372,19 +373,27 @@ inline void handleRfidPoll() {
 		}
 
 		if (isNew) {
+			heapLog("RFID:disc DETECTED (new)");
 			requestAudioStop();
+			heapLog("RFID:after requestAudioStop");
 			if (hasMapping) {
 				if (mapping.type == "track") {
+					heapLog("RFID:before requestAudioPlay(track)");
 					if (requestAudioPlay(mapping.target)) {
 						RfidGuard rGuard;
 						g_rfidAudioPlaying = true;
 					}
+					heapLog("RFID:after requestAudioPlay(track)");
 				} else if (mapping.type == "playlist") {
+					heapLog("RFID:before requestAudioPlayPlaylist");
 					if (requestAudioPlayPlaylist(mapping.target)) {
 						RfidGuard rGuard;
 						g_rfidAudioPlaying = true;
 					}
+					heapLog("RFID:after requestAudioPlayPlaylist");
 				}
+			} else {
+				heapLog("RFID:disc detected but NOT mapped");
 			}
 		}
 	} else {
@@ -405,7 +414,9 @@ inline void handleRfidPoll() {
 			}
 		}
 		if (shouldStop) {
+			heapLog("RFID:disc REMOVED, stopping audio");
 			requestAudioStop();
+			heapLog("RFID:after stop-on-removal");
 		}
 	}
 }

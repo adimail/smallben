@@ -53,3 +53,8 @@ const TickType_t AUDIO_TASK_DELAY_TICKS = 1;
 const int I2S_DMA_BUFFER_COUNT = 8;
 
 const size_t MAX_PLAYLIST_TRACKS = 128;
+
+inline void heapLog(const char *tag) {
+	Serial.printf("[HEAP] %-28s free=%u maxalloc=%u minever=%u psram=%u\n", tag, ESP.getFreeHeap(),
+				  ESP.getMaxAllocHeap(), ESP.getMinFreeHeap(), ESP.getPsramSize());
+}
