@@ -5,6 +5,7 @@
 #include <SPI.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include <vector>
 
 enum class StorageResult {
 	Ok,
@@ -560,42 +561,138 @@ inline StorageResult createPlaylist(const String &name) {
 	return StorageResult::Ok;
 }
 
+inline void updateDiscsCsvPlaylistRenameUnderLock(const String &oldName, const String &newName) {
+	if (!SD.exists("/discs.csv"))
+		return;
+	File inF = SD.open("/discs.csv", FILE_READ);
+	if (!inF)
+		return;
+	File outF = SD.open("/discs.tmp", FILE_WRITE);
+	if (!outF) {
+		inF.close();
+		return;
+	}
+	bool changed = false;
+	while (inF.available()) {
+		String line = inF.readStringUntil('\n');
+		line.trim();
+		if (line.length() == 0)
+			continue;
+		int p1 = line.indexOf('|');
+		int p2 = (p1 != -1) ? line.indexOf('|', p1 + 1) : -1;
+		int p3 = (p2 != -1) ? line.indexOf('|', p2 + 1) : -1;
+		if (p1 != -1 && p2 != -1 && p3 != -1) {
+			String uid = line.substring(0, p1);
+			String type = line.substring(p1 + 1, p2);
+			String target = line.substring(p2 + 1, p3);
+			String label = line.substring(p3 + 1);
+			if (type == "playlist" && target == oldName) {
+				target = newName;
+				if (label == oldName)
+					label = newName;
+				changed = true;
+			}
+			outF.print(uid);
+			outF.print('|');
+			outF.print(type);
+			outF.print('|');
+			outF.print(target);
+			outF.print('|');
+			outF.println(label);
+		} else {
+			outF.println(line);
+		}
+	}
+	inF.close();
+	outF.close();
+	if (changed) {
+		replaceFileSafelyUnderLock("/discs.tmp", "/discs.csv");
+	} else {
+		SD.remove("/discs.tmp");
+	}
+}
+
+inline void updateDiscsCsvPlaylistDeleteUnderLock(const String &name) {
+	if (!SD.exists("/discs.csv"))
+		return;
+	File inF = SD.open("/discs.csv", FILE_READ);
+	if (!inF)
+		return;
+	File outF = SD.open("/discs.tmp", FILE_WRITE);
+	if (!outF) {
+		inF.close();
+		return;
+	}
+	bool changed = false;
+	while (inF.available()) {
+		String line = inF.readStringUntil('\n');
+		line.trim();
+		if (line.length() == 0)
+			continue;
+		int p1 = line.indexOf('|');
+		int p2 = (p1 != -1) ? line.indexOf('|', p1 + 1) : -1;
+		int p3 = (p2 != -1) ? line.indexOf('|', p2 + 1) : -1;
+		if (p1 != -1 && p2 != -1 && p3 != -1) {
+			String type = line.substring(p1 + 1, p2);
+			String target = line.substring(p2 + 1, p3);
+			if (type == "playlist" && target == name) {
+				changed = true;
+				continue;
+			}
+		}
+		outF.println(line);
+	}
+	inF.close();
+	outF.close();
+	if (changed) {
+		replaceFileSafelyUnderLock("/discs.tmp", "/discs.csv");
+	} else {
+		SD.remove("/discs.tmp");
+	}
+}
+
 inline StorageResult renamePlaylist(const String &oldName, const String &newName) {
 	if (!isValidPlaylistName(oldName) || !isValidPlaylistName(newName)) {
 		return StorageResult::InvalidPath;
 	}
-	return renameStoragePath(getPlaylistPath(oldName), getPlaylistPath(newName));
+	String oldPath = getPlaylistPath(oldName);
+	String newPath = getPlaylistPath(newName);
+	if (!g_sdReady)
+		return StorageResult::StorageUnavailable;
+	if (isAudioPathCurrentlyActive(oldPath) || isAudioPathCurrentlyActive(newPath)) {
+		return StorageResult::Active;
+	}
+	SdGuard guard;
+	if (!SD.exists(oldPath))
+		return StorageResult::NotFound;
+	if (SD.exists(newPath))
+		return StorageResult::AlreadyExists;
+	if (!SD.rename(oldPath, newPath) || !SD.exists(newPath)) {
+		return StorageResult::Fail;
+	}
+	updateDiscsCsvPlaylistRenameUnderLock(oldName, newName);
+	return StorageResult::Ok;
 }
 
 inline StorageResult deletePlaylist(const String &name) {
 	if (!isValidPlaylistName(name)) {
 		return StorageResult::InvalidPath;
 	}
-	return deleteFile(getPlaylistPath(name));
-}
-
-inline size_t getPlaylistTrackCount(const String &name) {
-	if (!g_sdReady || !isValidPlaylistName(name)) {
-		return 0;
-	}
 	String path = getPlaylistPath(name);
-	SdGuard guard;
-	File f = SD.open(path, FILE_READ);
-	if (!f)
-		return 0;
-	size_t count = 0;
-	while (f.available()) {
-		String line = f.readStringUntil('\n');
-		line.trim();
-		if (line.length() > 0 && !line.startsWith("#")) {
-			count++;
-		}
+	if (!g_sdReady)
+		return StorageResult::StorageUnavailable;
+	if (isAudioPathCurrentlyActive(path)) {
+		return StorageResult::Active;
 	}
-	f.close();
-	return count;
+	SdGuard guard;
+	StorageResult res = deleteFileUnderLock(path);
+	if (res == StorageResult::Ok) {
+		updateDiscsCsvPlaylistDeleteUnderLock(name);
+	}
+	return res;
 }
 
-inline bool getPlaylistTrackAt(const String &name, size_t targetIndex, String &outTrack) {
+inline bool loadPlaylistTracks(const String &name, std::vector<String> &tracks) {
 	if (!g_sdReady || !isValidPlaylistName(name)) {
 		return false;
 	}
@@ -604,22 +701,15 @@ inline bool getPlaylistTrackAt(const String &name, size_t targetIndex, String &o
 	File f = SD.open(path, FILE_READ);
 	if (!f)
 		return false;
-	size_t index = 0;
-	bool found = false;
 	while (f.available()) {
 		String line = f.readStringUntil('\n');
 		line.trim();
 		if (line.length() > 0 && !line.startsWith("#")) {
-			if (index == targetIndex) {
-				outTrack = line;
-				found = true;
-				break;
-			}
-			index++;
+			tracks.push_back(line);
 		}
 	}
 	f.close();
-	return found;
+	return true;
 }
 
 inline StorageResult appendPlaylistTrack(const String &name, const String &trackPath) {

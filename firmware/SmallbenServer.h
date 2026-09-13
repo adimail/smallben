@@ -1075,11 +1075,6 @@ inline void handleDynamicPlaylists() {
 			}
 			StorageResult res = renamePlaylist(id, newName);
 			if (res == StorageResult::Ok) {
-				if (!cascadeRenamePlaylist(id, newName)) {
-					renamePlaylist(newName, id);
-					sendJsonError(500, "mapping cascade failed");
-					return;
-				}
 				sendJsonOk();
 			} else {
 				sendStorageResult(res);
@@ -1089,7 +1084,6 @@ inline void handleDynamicPlaylists() {
 		if (method == HTTP_DELETE) {
 			StorageResult res = deletePlaylist(id);
 			if (res == StorageResult::Ok) {
-				cascadeDeletePlaylist(id);
 				sendJsonOk();
 			} else {
 				sendStorageResult(res);
