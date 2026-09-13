@@ -27,7 +27,7 @@ static unsigned long btnStateChangeTime = 0;
 static unsigned long btnPressStartTime = 0;
 static bool btnLongPressFired = false;
 const unsigned long BUTTON_DEBOUNCE_MS = 40;
-const unsigned long LONG_PRESS_DURATION_MS = 1500;
+const unsigned long LONG_PRESS_DURATION_MS = 800;
 
 inline PlaybackMode getCurrentMode() { return currentMode; }
 

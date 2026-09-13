@@ -512,12 +512,20 @@ function loadPlaylists(){
 }
 
 btnNewList.onclick = () => {
+  if(playlists.length >= 10){
+    showToast('Maximum 10 playlists reached');
+    return;
+  }
   newPlistForm.style.display = 'flex';
   newPlistNameInput.value = '';
   newPlistNameInput.focus();
 };
 btnCancelNewPlist.onclick = () => { newPlistForm.style.display = 'none'; };
 btnConfirmNewPlist.onclick = () => {
+  if(playlists.length >= 10){
+    showToast('Maximum 10 playlists reached');
+    return;
+  }
   const n = newPlistNameInput.value.trim();
   if(!n) return;
   fetch('/api/p', {
@@ -810,8 +818,8 @@ btnUp.onclick = () => fileInput.click();
 fileInput.onchange = () => {
   if(!fileInput.files || fileInput.files.length === 0) return;
   const file = fileInput.files[0];
-  if(file.size > 31457280){
-    showToast('Exceeds 30MB limit.');
+  if(file.size > 10485760){
+    showToast('Exceeds 10MB limit.');
     fileInput.value = '';
     return;
   }

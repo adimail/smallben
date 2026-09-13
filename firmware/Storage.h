@@ -569,6 +569,29 @@ inline StorageResult createPlaylist(const String &name) {
 	if (SD.exists(path)) {
 		return StorageResult::AlreadyExists;
 	}
+
+	File dir = SD.open("/p");
+	if (dir && dir.isDirectory()) {
+		size_t pCount = 0;
+		while (true) {
+			File entry = dir.openNextFile();
+			if (!entry)
+				break;
+			String ename = entry.name();
+			bool isDir = entry.isDirectory();
+			entry.close();
+			String lower = ename;
+			lower.toLowerCase();
+			if (!isDir && lower.endsWith(".m3u") && !ename.startsWith(".")) {
+				pCount++;
+			}
+		}
+		dir.close();
+		if (pCount >= MAX_PLAYLISTS) {
+			return StorageResult::NoSpace;
+		}
+	}
+
 	File f = SD.open(path, FILE_WRITE);
 	if (!f) {
 		return StorageResult::OpenFailed;

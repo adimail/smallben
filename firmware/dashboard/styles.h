@@ -126,6 +126,6 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-mono);font-si
 .toast.toast-error{border-color:var(--red);color:var(--red)}
 .toast.toast-success{border-color:var(--green);color:var(--green)}
 @media (max-width: 480px){
-  .drawer{width:100vw;max-width:100vw}
+  .drawer{width:90vw;max-width:90vw}
 }
 )CSS";

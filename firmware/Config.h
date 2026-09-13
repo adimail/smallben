@@ -28,7 +28,8 @@ const uint16_t HTTP_PORT = 80;
 
 const char *BT_DEVICE_NAME = "Smallben";
 
-const size_t MAX_UPLOAD_SIZE = 31457280;
+const size_t MAX_UPLOAD_SIZE = 10485760;
+const size_t MAX_PLAYLISTS = 10;
 const size_t MIN_SD_FREE_MARGIN = 2097152;
 const size_t MAX_JSON_BODY_SIZE = 16384;
 
@@ -45,8 +46,8 @@ const size_t NUM_HIDDEN_EXTENSIONS = sizeof(HIDDEN_EXTENSIONS) / sizeof(HIDDEN_E
 const char *const HIDDEN_PREFIXES[] = {".", "._"};
 const size_t NUM_HIDDEN_PREFIXES = sizeof(HIDDEN_PREFIXES) / sizeof(HIDDEN_PREFIXES[0]);
 
-const uint32_t AUDIO_TASK_STACK_SIZE = 4096;
-const UBaseType_t AUDIO_TASK_PRIORITY = 4;
+const uint32_t AUDIO_TASK_STACK_SIZE = 8192;
+const UBaseType_t AUDIO_TASK_PRIORITY = 5;
 const BaseType_t AUDIO_TASK_CORE = 1;
 const TickType_t AUDIO_TASK_DELAY_TICKS = 1;
 const int I2S_DMA_BUFFER_COUNT = 8;
