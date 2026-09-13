@@ -49,6 +49,7 @@ inline void streamDashboard(WebServer &srv) {
 	srv.sendContent_P(PSTR("</div>"));
 
 	srv.sendContent_P(DASHBOARD_SIDEBAR_HTML);
+	srv.sendContent_P(PSTR("<div id=\"toast\" class=\"toast\"></div>"));
 
 	srv.sendContent_P(PSTR("<script>"));
 	srv.sendContent_P(DASHBOARD_JS);

@@ -19,6 +19,42 @@ static size_t uploadBytesWritten = 0;
 static String uploadFinalPath = "";
 static String uploadTempPath = "";
 
+inline void sendStorageResult(StorageResult res, const String &successMsg = "{\"status\":\"ok\"}") {
+	switch (res) {
+	case StorageResult::Ok:
+		server.send(200, "application/json", successMsg);
+		break;
+	case StorageResult::NotFound:
+		server.send(404, "application/json", "{\"error\":\"not found\"}");
+		break;
+	case StorageResult::AlreadyExists:
+		server.send(409, "application/json", "{\"error\":\"already exists\"}");
+		break;
+	case StorageResult::InvalidPath:
+		server.send(400, "application/json", "{\"error\":\"invalid path or name\"}");
+		break;
+	case StorageResult::Protected:
+		server.send(403, "application/json", "{\"error\":\"path is protected\"}");
+		break;
+	case StorageResult::Active:
+		server.send(409, "application/json",
+					"{\"error\":\"item is currently active in playback\"}");
+		break;
+	case StorageResult::NoSpace:
+		server.send(507, "application/json", "{\"error\":\"storage full\"}");
+		break;
+	case StorageResult::DirectoryNotEmpty:
+		server.send(409, "application/json", "{\"error\":\"directory not empty\"}");
+		break;
+	case StorageResult::StorageUnavailable:
+		server.send(503, "application/json", "{\"error\":\"SD card unavailable\"}");
+		break;
+	default:
+		server.send(500, "application/json", "{\"error\":\"storage operation failed\"}");
+		break;
+	}
+}
+
 inline String jsonEscape(const String &in) {
 	String out;
 	out.reserve(in.length() + 8);
@@ -175,7 +211,7 @@ inline void handleNow() {
 	json += "\"name\":\"" + jsonEscape(nameStr) + "\"";
 	json += "},";
 	json += "\"sd\":{";
-	json += "\"ready\":" + String(isSdReady() ? "true" : "false") + ",";
+	json += "\"ready\":" + String(isStorageReady() ? "true" : "false") + ",";
 	json += "\"totalBytes\":" + String((unsigned long long)getSdTotalBytes()) + ",";
 	json += "\"usedBytes\":" + String((unsigned long long)getSdUsedBytes());
 	json += "},";
@@ -224,13 +260,9 @@ inline void handleApiDiscsMap() {
 	String type = extractJsonString(body, "type");
 	String target = extractJsonString(body, "target");
 	String label = extractJsonString(body, "label");
-	if (mapDisc(uid, type, target, label)) {
-		server.send(200, "application/json", "{\"status\":\"ok\"}");
-	} else {
-		server.send(
-			400, "application/json",
-			"{\"error\":\"invalid parameters, table full, target invalid, or write failed\"}");
-	}
+
+	StorageResult res = mapDisc(uid, type, target, label);
+	sendStorageResult(res);
 }
 
 inline void handleApiDiscsDelete() {
@@ -244,20 +276,13 @@ inline void handleApiDiscsDelete() {
 		}
 		uid = extractJsonString(server.arg("plain"), "uid");
 	}
-	UnmapResult res = unmapDisc(uid);
-	if (res == UnmapResult::Ok) {
-		server.send(200, "application/json", "{\"status\":\"ok\"}");
-	} else if (res == UnmapResult::NotFound) {
-		server.send(404, "application/json", "{\"error\":\"disc not found\"}");
-	} else {
-		server.send(500, "application/json",
-					"{\"error\":\"SD storage error - disc was not removed\"}");
-	}
+	StorageResult res = unmapDisc(uid);
+	sendStorageResult(res);
 }
 
 inline void handleApiMp3() {
-	if (!isSdReady()) {
-		server.send(500, "application/json", "[]");
+	if (!isStorageReady()) {
+		server.send(503, "application/json", "[]");
 		return;
 	}
 	server.setContentLength(CONTENT_LENGTH_UNKNOWN);
@@ -281,7 +306,7 @@ inline void handleApiMp3() {
 					if (!entry)
 						break;
 					String name = entry.name();
-					if (!isJunk(name)) {
+					if (!isSystemOrHidden(name)) {
 						String fullPath = (currentDir == "/" ? "" : currentDir) + "/" + name;
 						if (entry.isDirectory()) {
 							subDirs.push_back(fullPath);
@@ -316,7 +341,7 @@ inline void handleApiTrackPlaylists() {
 		return;
 	}
 	String path = server.arg("path");
-	if (!isSafePath(path)) {
+	if (!isValidPath(path)) {
 		server.send(400, "application/json", "{\"error\":\"invalid path\"}");
 		return;
 	}
@@ -325,7 +350,7 @@ inline void handleApiTrackPlaylists() {
 	server.sendContent("[");
 	bool first = true;
 
-	if (isSdReady()) {
+	if (isStorageReady()) {
 		std::vector<String> playlistNames;
 		{
 			SdGuard guard;
@@ -387,7 +412,7 @@ inline void handleApiTree() {
 	String path = "/";
 	if (server.hasArg("path"))
 		path = server.arg("path");
-	if (!isSafePath(path)) {
+	if (!isValidPath(path)) {
 		server.send(400, "application/json", "{\"error\":\"invalid path\"}");
 		return;
 	}
@@ -399,7 +424,7 @@ inline void handleApiTree() {
 	std::vector<TreeNode> nodes;
 	{
 		SdGuard guard;
-		File dir = SD.open(path);
+		File dir = SD.open(normalizePath(path));
 		if (!dir || !dir.isDirectory()) {
 			if (dir)
 				dir.close();
@@ -432,18 +457,33 @@ inline void handleApiTree() {
 	server.sendContent("");
 }
 
+inline void handleApiFolderCreate() {
+	String path = "";
+	if (server.hasArg("path")) {
+		path = server.arg("path");
+	} else if (server.hasArg("plain")) {
+		if (server.arg("plain").length() > MAX_JSON_BODY_SIZE) {
+			server.send(413, "application/json", "{\"error\":\"payload too large\"}");
+			return;
+		}
+		path = extractJsonString(server.arg("plain"), "path");
+	}
+	if (path.length() == 0) {
+		server.send(400, "application/json", "{\"error\":\"missing path\"}");
+		return;
+	}
+	StorageResult res = createDirectory(path);
+	sendStorageResult(res);
+}
+
 inline void handleApiDelete() {
 	if (!server.hasArg("path")) {
 		server.send(400, "application/json", "{\"error\":\"missing path\"}");
 		return;
 	}
 	String path = server.arg("path");
-	if (deleteStoragePath(path)) {
-		server.send(200, "application/json", "{\"status\":\"ok\"}");
-	} else {
-		server.send(403, "application/json",
-					"{\"error\":\"delete failed, protected, or currently active\"}");
-	}
+	StorageResult res = deleteStoragePath(path);
+	sendStorageResult(res);
 }
 
 inline void handleApiDownload() {
@@ -451,8 +491,8 @@ inline void handleApiDownload() {
 		server.send(400, "text/plain", "Missing path parameter");
 		return;
 	}
-	String path = server.arg("path");
-	if (!isSafePath(path) || isProtectedStoragePath(path)) {
+	String path = normalizePath(server.arg("path"));
+	if (!isValidPath(path) || isProtectedPath(path)) {
 		server.send(404, "text/plain", "File not found");
 		return;
 	}
@@ -521,6 +561,12 @@ inline void handleFileUploadProcess() {
 		uploadFinalPath = "";
 		uploadTempPath = "";
 
+		if (!isStorageReady()) {
+			uploadAborted = true;
+			uploadError = "SD_UNAVAILABLE";
+			return;
+		}
+
 		uint64_t freeBytes = getSdFreeBytes();
 		if (freeBytes < MIN_SD_FREE_MARGIN) {
 			uploadAborted = true;
@@ -531,8 +577,8 @@ inline void handleFileUploadProcess() {
 		String targetDir = "/";
 		if (server.hasArg("path")) {
 			String p = server.arg("path");
-			if (isSafePath(p))
-				targetDir = p;
+			if (isValidPath(p))
+				targetDir = normalizePath(p);
 		}
 		String filename = upload.filename;
 		int slashIndex = filename.lastIndexOf('/');
@@ -544,20 +590,20 @@ inline void handleFileUploadProcess() {
 
 		if (!isSafeUploadFilename(filename)) {
 			uploadAborted = true;
-			uploadError = "INVALID_FILE";
+			uploadError = "INVALID_FILENAME";
 			return;
 		}
 
 		uploadFinalPath = (targetDir == "/" ? "" : targetDir) + "/" + filename;
-		uploadTempPath = uploadFinalPath + ".uploading";
+		uploadTempPath = uploadFinalPath + ".tmp";
 
-		SdGuard guard;
-		if (!canMutateStoragePathUnderGuard(uploadFinalPath)) {
+		if (isProtectedPath(uploadFinalPath) || isAudioPathCurrentlyActive(uploadFinalPath)) {
 			uploadAborted = true;
-			uploadError = "INVALID_PATH";
+			uploadError = "PROTECTED_OR_ACTIVE";
 			return;
 		}
 
+		SdGuard guard;
 		if (SD.exists(uploadTempPath)) {
 			SD.remove(uploadTempPath);
 		}
@@ -607,50 +653,12 @@ inline void handleFileUploadProcess() {
 			uploadFile.close();
 		}
 		if (!uploadAborted) {
-			SdGuard guard;
-			if (!SD.exists(uploadTempPath)) {
+			StorageResult res =
+				commitUploadFile(uploadTempPath, uploadFinalPath, uploadBytesWritten);
+			if (res != StorageResult::Ok) {
 				uploadAborted = true;
-				uploadError = "TEMP_MISSING";
-				return;
+				uploadError = "COMMIT_FAILED";
 			}
-			File tempF = SD.open(uploadTempPath, FILE_READ);
-			size_t tempSize = tempF ? tempF.size() : 0;
-			if (tempF) {
-				tempF.close();
-			}
-			if (tempSize != uploadBytesWritten) {
-				uploadAborted = true;
-				uploadError = "VERIFY_FAILED";
-				SD.remove(uploadTempPath);
-				return;
-			}
-			if (!canMutateStoragePathUnderGuard(uploadFinalPath)) {
-				uploadAborted = true;
-				uploadError = "CANNOT_MUTATE";
-				SD.remove(uploadTempPath);
-				return;
-			}
-			if (SD.exists(uploadFinalPath)) {
-				SD.remove(uploadFinalPath);
-			}
-			if (!SD.rename(uploadTempPath, uploadFinalPath)) {
-				uploadAborted = true;
-				uploadError = "RENAME_FAILED";
-				SD.remove(uploadTempPath);
-				return;
-			}
-			File finalF = SD.open(uploadFinalPath, FILE_READ);
-			size_t finalSize = finalF ? finalF.size() : 0;
-			if (finalF) {
-				finalF.close();
-			}
-			if (finalSize != uploadBytesWritten) {
-				uploadAborted = true;
-				uploadError = "VERIFY_FINAL_FAILED";
-				SD.remove(uploadFinalPath);
-				return;
-			}
-			refreshSdStatsDirect();
 		} else {
 			SdGuard guard;
 			if (uploadTempPath.length() > 0 && SD.exists(uploadTempPath)) {
@@ -674,18 +682,6 @@ inline void handleFileUploadProcess() {
 }
 
 inline void handleFileUploadResponse() {
-	if (server.hasArg("path") && uploadFile.name() == nullptr && uploadBytesWritten == 0 &&
-		!uploadAborted) {
-		String dirPath = server.arg("path");
-		if (isSafePath(dirPath) && canMutateStoragePathUnderGuard(dirPath)) {
-			SdGuard guard;
-			if (!SD.exists(dirPath)) {
-				SD.mkdir(dirPath);
-				server.send(200, "application/json", "{\"status\":\"ok\"}");
-				return;
-			}
-		}
-	}
 	if (uploadAborted) {
 		String err = uploadError.length() > 0 ? uploadError : "UPLOAD_FAILED";
 		server.send(400, "application/json", "{\"status\":\"error\",\"error\":\"" + err + "\"}");
@@ -695,8 +691,8 @@ inline void handleFileUploadResponse() {
 }
 
 inline void handleApiPlaylistsGet() {
-	if (!isSdReady()) {
-		server.send(500, "application/json", "[]");
+	if (!isStorageReady()) {
+		server.send(503, "application/json", "[]");
 		return;
 	}
 	std::vector<String> playlistNames;
@@ -758,15 +754,8 @@ inline void handleApiPlaylistsPost() {
 	}
 	String body = server.arg("plain");
 	String name = extractJsonString(body, "name");
-	if (!isSafePlaylistName(name)) {
-		server.send(400, "application/json", "{\"error\":\"invalid name\"}");
-		return;
-	}
-	if (createPlaylist(name)) {
-		server.send(200, "application/json", "{\"status\":\"ok\"}");
-	} else {
-		server.send(409, "application/json", "{\"error\":\"already exists or write failed\"}");
-	}
+	StorageResult res = createPlaylist(name);
+	sendStorageResult(res);
 }
 
 inline void handleApiPlaylistTracksGet() {
@@ -777,7 +766,7 @@ inline void handleApiPlaylistTracksGet() {
 	if (trackSuffix != -1) {
 		id = urldecode(uri.substring(prefixLen, trackSuffix));
 	}
-	if (!isSafePlaylistName(id)) {
+	if (!isValidPlaylistName(id)) {
 		server.send(400, "application/json", "{\"error\":\"invalid id\"}");
 		return;
 	}
@@ -811,18 +800,10 @@ inline void handleApiPlaylistTracksUpdate() {
 		return;
 	}
 	String id = urldecode(server.arg("id"));
-	if (!isSafePlaylistName(id)) {
-		server.send(400, "application/json", "{\"error\":\"invalid id\"}");
-		return;
-	}
 	String body = server.arg("plain");
 	std::vector<String> tracks = extractJsonArray(body, "tracks");
-	if (overwritePlaylistTracks(id, tracks)) {
-		server.send(200, "application/json", "{\"status\":\"ok\"}");
-	} else {
-		server.send(400, "application/json",
-					"{\"error\":\"write failed, invalid track, or track missing\"}");
-	}
+	StorageResult res = overwritePlaylistTracks(id, tracks);
+	sendStorageResult(res);
 }
 
 inline void handleApiPlaylistTracksAppend() {
@@ -835,22 +816,10 @@ inline void handleApiPlaylistTracksAppend() {
 		return;
 	}
 	String id = urldecode(server.arg("id"));
-	if (!isSafePlaylistName(id)) {
-		server.send(400, "application/json", "{\"error\":\"invalid id\"}");
-		return;
-	}
 	String body = server.arg("plain");
 	String path = extractJsonString(body, "path");
-	if (!isSafePath(path) || !isMp3(path)) {
-		server.send(400, "application/json", "{\"error\":\"invalid path\"}");
-		return;
-	}
-	if (appendPlaylistTrack(id, path)) {
-		server.send(200, "application/json", "{\"status\":\"ok\"}");
-	} else {
-		server.send(500, "application/json",
-					"{\"error\":\"append failed, track missing, or playlist full\"}");
-	}
+	StorageResult res = appendPlaylistTrack(id, path);
+	sendStorageResult(res);
 }
 
 inline void handleApiPlayerToggle() {
@@ -868,7 +837,7 @@ inline void handleApiPlayerToggle() {
 		}
 		path = extractJsonString(server.arg("plain"), "path");
 	}
-	if (path.length() == 0 || !isSafePath(path) || !isMp3(path)) {
+	if (path.length() == 0 || !isValidPath(path) || !isMp3(path)) {
 		server.send(400, "application/json", "{\"error\":\"invalid path\"}");
 		return;
 	}
@@ -901,7 +870,7 @@ inline void handleDynamicPlaylists() {
 	}
 	if (uri.startsWith("/api/playlists/")) {
 		String id = urldecode(uri.substring(15));
-		if (!isSafePlaylistName(id)) {
+		if (!isValidPlaylistName(id)) {
 			server.send(400, "application/json", "{\"error\":\"invalid id\"}");
 			return;
 		}
@@ -912,11 +881,12 @@ inline void handleDynamicPlaylists() {
 			}
 			String body = server.arg("plain");
 			String newName = extractJsonString(body, "newName");
-			if (!isSafePlaylistName(newName)) {
+			if (!isValidPlaylistName(newName)) {
 				server.send(400, "application/json", "{\"error\":\"invalid newName\"}");
 				return;
 			}
-			if (renamePlaylist(id, newName)) {
+			StorageResult res = renamePlaylist(id, newName);
+			if (res == StorageResult::Ok) {
 				if (!cascadeRenamePlaylist(id, newName)) {
 					renamePlaylist(newName, id);
 					server.send(500, "application/json", "{\"error\":\"mapping cascade failed\"}");
@@ -924,16 +894,17 @@ inline void handleDynamicPlaylists() {
 				}
 				server.send(200, "application/json", "{\"status\":\"ok\"}");
 			} else {
-				server.send(500, "application/json", "{\"error\":\"rename failed\"}");
+				sendStorageResult(res);
 			}
 			return;
 		}
 		if (method == HTTP_DELETE) {
-			if (deletePlaylist(id)) {
+			StorageResult res = deletePlaylist(id);
+			if (res == StorageResult::Ok) {
 				cascadeDeletePlaylist(id);
 				server.send(200, "application/json", "{\"status\":\"ok\"}");
 			} else {
-				server.send(500, "application/json", "{\"error\":\"delete failed\"}");
+				sendStorageResult(res);
 			}
 			return;
 		}
@@ -947,6 +918,7 @@ inline void initServer() {
 	server.on("/api/mp3", HTTP_GET, handleApiMp3);
 	server.on("/api/track/playlists", HTTP_GET, handleApiTrackPlaylists);
 	server.on("/api/tree", HTTP_GET, handleApiTree);
+	server.on("/api/folders", HTTP_POST, handleApiFolderCreate);
 	server.on("/api/delete", HTTP_DELETE, handleApiDelete);
 	server.on("/api/download", HTTP_GET, handleApiDownload);
 	server.on("/api/upload", HTTP_POST, handleFileUploadResponse, handleFileUploadProcess);

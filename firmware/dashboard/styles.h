@@ -112,6 +112,9 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-mono);font-si
 .input-text{background:var(--panel);border:1px solid var(--line);color:var(--text);padding:8px 10px;font-family:inherit;font-size:12px;border-radius:2px;outline:none;width:100%}
 .input-text:focus{border-color:var(--amber)}
 .form-actions{display:flex;gap:8px;justify-content:flex-end}
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--line);color:var(--text);padding:10px 18px;border-radius:3px;font-size:12px;z-index:200;display:none;box-shadow:0 6px 20px rgba(0,0,0,0.6);max-width:90vw;text-align:center;pointer-events:none}
+.toast.toast-error{border-color:var(--red);color:var(--red)}
+.toast.toast-success{border-color:var(--green);color:var(--green)}
 @media (max-width: 480px){
   .drawer{width:100vw;max-width:100vw}
 }

@@ -11,8 +11,6 @@
 #include <map>
 #include <vector>
 
-enum class UnmapResult { Ok, NotFound, StorageError };
-
 struct DiscMapping {
 	String uid;
 	String type;
@@ -84,36 +82,40 @@ inline String sanitizeField(const String &input) {
 }
 
 inline void loadDiscMappings() {
-	if (!isSdReady()) {
+	if (!isStorageReady()) {
 		RfidGuard rGuard;
 		g_discMappings.clear();
 		return;
 	}
+	String content = "";
+	StorageResult res = readStorageText("/discs.csv", content);
+	if (res != StorageResult::Ok) {
+		RfidGuard rGuard;
+		g_discMappings.clear();
+		return;
+	}
+
 	std::map<String, DiscMapping> loaded;
-	{
-		SdGuard guard;
-		if (SD.exists("/discs.csv")) {
-			File f = SD.open("/discs.csv", FILE_READ);
-			if (f) {
-				while (f.available()) {
-					String line = f.readStringUntil('\n');
-					line.trim();
-					if (line.length() == 0)
-						continue;
-					int p1 = line.indexOf('|');
-					int p2 = (p1 != -1) ? line.indexOf('|', p1 + 1) : -1;
-					int p3 = (p2 != -1) ? line.indexOf('|', p2 + 1) : -1;
-					if (p1 != -1 && p2 != -1 && p3 != -1) {
-						String uid = line.substring(0, p1);
-						String type = line.substring(p1 + 1, p2);
-						String target = line.substring(p2 + 1, p3);
-						String label = line.substring(p3 + 1);
-						if (uid.length() > 0 && target.length() > 0) {
-							loaded[uid] = {uid, type, target, label};
-						}
-					}
-				}
-				f.close();
+	int start = 0;
+	while (start < (int)content.length()) {
+		int end = content.indexOf('\n', start);
+		if (end == -1)
+			end = content.length();
+		String line = content.substring(start, end);
+		line.trim();
+		start = end + 1;
+		if (line.length() == 0)
+			continue;
+		int p1 = line.indexOf('|');
+		int p2 = (p1 != -1) ? line.indexOf('|', p1 + 1) : -1;
+		int p3 = (p2 != -1) ? line.indexOf('|', p2 + 1) : -1;
+		if (p1 != -1 && p2 != -1 && p3 != -1) {
+			String uid = line.substring(0, p1);
+			String type = line.substring(p1 + 1, p2);
+			String target = line.substring(p2 + 1, p3);
+			String label = line.substring(p3 + 1);
+			if (uid.length() > 0 && target.length() > 0) {
+				loaded[uid] = {uid, type, target, label};
 			}
 		}
 	}
@@ -121,30 +123,29 @@ inline void loadDiscMappings() {
 	g_discMappings = std::move(loaded);
 }
 
-inline bool saveDiscMappingsFile() {
-	if (!isSdReady()) {
-		return false;
+inline String serializeMappings(const std::map<String, DiscMapping> &mappings) {
+	String out = "";
+	for (const auto &pair : mappings) {
+		out += pair.second.uid + "|" + pair.second.type + "|" + pair.second.target + "|" +
+			   pair.second.label + "\n";
 	}
-	SdGuard guard;
-	if (SD.exists("/discs.csv")) {
-		SD.remove("/discs.csv");
-	}
-	File f = SD.open("/discs.csv", FILE_WRITE);
-	if (!f) {
-		return false;
-	}
-	for (const auto &pair : g_discMappings) {
-		f.println(pair.second.uid + "|" + pair.second.type + "|" + pair.second.target + "|" +
-				  pair.second.label);
-	}
-	f.close();
-	return true;
+	return out;
 }
 
-inline bool mapDisc(const String &rawUid, const String &rawType, const String &rawTarget,
-					const String &rawLabel) {
-	if (!isSdReady()) {
-		return false;
+inline StorageResult commitMappingsAtomically(const std::map<String, DiscMapping> &newMap) {
+	String serialized = serializeMappings(newMap);
+	StorageResult res = writeTextAtomic("/discs.csv", serialized);
+	if (res == StorageResult::Ok) {
+		RfidGuard rGuard;
+		g_discMappings = newMap;
+	}
+	return res;
+}
+
+inline StorageResult mapDisc(const String &rawUid, const String &rawType, const String &rawTarget,
+							 const String &rawLabel) {
+	if (!isStorageReady()) {
+		return StorageResult::StorageUnavailable;
 	}
 
 	String uid = sanitizeField(rawUid);
@@ -153,28 +154,29 @@ inline bool mapDisc(const String &rawUid, const String &rawType, const String &r
 	String label = sanitizeField(rawLabel);
 
 	if (uid.length() == 0 || (type != "track" && type != "playlist") || target.length() == 0) {
-		return false;
+		return StorageResult::InvalidPath;
 	}
 
-	{
-		SdGuard guard;
-		if (type == "track") {
-			if (!isSafePath(target) || !isMp3(target) || !SD.exists(target)) {
-				return false;
-			}
-		} else if (type == "playlist") {
-			if (!isSafePlaylistName(target) || !SD.exists(getPlaylistPath(target))) {
-				return false;
-			}
+	if (type == "track") {
+		if (!isValidPath(target) || !isMp3(target) || !storageExists(target)) {
+			return StorageResult::NotFound;
+		}
+	} else if (type == "playlist") {
+		if (!isValidPlaylistName(target) || !storageExists(getPlaylistPath(target))) {
+			return StorageResult::NotFound;
 		}
 	}
 
+	std::map<String, DiscMapping> staging;
 	{
 		RfidGuard rGuard;
-		g_discMappings[uid] = {uid, type, target, label.length() > 0 ? label : target};
-		if (!saveDiscMappingsFile()) {
-			return false;
-		}
+		staging = g_discMappings;
+	}
+	staging[uid] = {uid, type, target, label.length() > 0 ? label : target};
+
+	StorageResult res = commitMappingsAtomically(staging);
+	if (res != StorageResult::Ok) {
+		return res;
 	}
 
 	bool shouldPlayNow = false;
@@ -201,64 +203,74 @@ inline bool mapDisc(const String &rawUid, const String &rawType, const String &r
 		}
 	}
 
-	return true;
+	return StorageResult::Ok;
 }
 
-inline UnmapResult unmapDisc(const String &rawUid) {
-	if (!isSdReady()) {
-		return UnmapResult::StorageError;
+inline StorageResult unmapDisc(const String &rawUid) {
+	if (!isStorageReady()) {
+		return StorageResult::StorageUnavailable;
 	}
 
 	String uid = sanitizeField(rawUid);
-	RfidGuard rGuard;
-	auto it = g_discMappings.find(uid);
-	if (it == g_discMappings.end()) {
-		return UnmapResult::NotFound;
+	std::map<String, DiscMapping> staging;
+	{
+		RfidGuard rGuard;
+		auto it = g_discMappings.find(uid);
+		if (it == g_discMappings.end()) {
+			return StorageResult::NotFound;
+		}
+		staging = g_discMappings;
+		staging.erase(uid);
 	}
-	g_discMappings.erase(it);
-	if (!saveDiscMappingsFile()) {
-		return UnmapResult::StorageError;
-	}
-	return UnmapResult::Ok;
+
+	return commitMappingsAtomically(staging);
 }
 
 inline bool cascadeRenamePlaylist(const String &oldName, const String &newName) {
-	if (!isSdReady()) {
+	if (!isStorageReady()) {
 		return false;
 	}
-	RfidGuard rGuard;
+	std::map<String, DiscMapping> staging;
 	bool changed = false;
-	for (auto &pair : g_discMappings) {
-		if (pair.second.type == "playlist" && pair.second.target == oldName) {
-			pair.second.target = newName;
-			if (pair.second.label == oldName) {
-				pair.second.label = newName;
+	{
+		RfidGuard rGuard;
+		staging = g_discMappings;
+		for (auto &pair : staging) {
+			if (pair.second.type == "playlist" && pair.second.target == oldName) {
+				pair.second.target = newName;
+				if (pair.second.label == oldName) {
+					pair.second.label = newName;
+				}
+				changed = true;
 			}
-			changed = true;
 		}
 	}
 	if (!changed)
 		return true;
-	return saveDiscMappingsFile();
+	return commitMappingsAtomically(staging) == StorageResult::Ok;
 }
 
 inline bool cascadeDeletePlaylist(const String &name) {
-	if (!isSdReady()) {
+	if (!isStorageReady()) {
 		return false;
 	}
-	RfidGuard rGuard;
+	std::map<String, DiscMapping> staging;
 	bool changed = false;
-	for (auto it = g_discMappings.begin(); it != g_discMappings.end();) {
-		if (it->second.type == "playlist" && it->second.target == name) {
-			it = g_discMappings.erase(it);
-			changed = true;
-		} else {
-			++it;
+	{
+		RfidGuard rGuard;
+		staging = g_discMappings;
+		for (auto it = staging.begin(); it != staging.end();) {
+			if (it->second.type == "playlist" && it->second.target == name) {
+				it = staging.erase(it);
+				changed = true;
+			} else {
+				++it;
+			}
 		}
 	}
 	if (!changed)
 		return true;
-	return saveDiscMappingsFile();
+	return commitMappingsAtomically(staging) == StorageResult::Ok;
 }
 
 inline std::vector<DiscMapping> getDiscMappingsSnapshot() {

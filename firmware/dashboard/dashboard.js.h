@@ -15,6 +15,7 @@ let activeTagMapped = false;
 let isFetchingNow = false;
 let currentFolder = '/';
 let activeSelectedTrack = null;
+let toastTimer = null;
 
 const tabTracks = document.getElementById('tabTracks');
 const tabDiscs = document.getElementById('tabDiscs');
@@ -101,6 +102,18 @@ const modalTargetLabel = document.getElementById('modalTargetLabel');
 const modalTargetSelect = document.getElementById('modalTargetSelect');
 const btnMapModalClose = document.getElementById('btnMapModalClose');
 const btnModalSave = document.getElementById('btnModalSave');
+
+function showToast(msg, type = 'error'){
+  const toast = document.getElementById('toast');
+  if(!toast) return;
+  toast.textContent = msg;
+  toast.className = 'toast ' + (type === 'error' ? 'toast-error' : 'toast-success');
+  toast.style.display = 'block';
+  if(toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    toast.style.display = 'none';
+  }, 4000);
+}
 
 function fmt(b){
   if(b < 1048576) return (b/1024).toFixed(1) + ' KB';
@@ -265,10 +278,16 @@ btnReaderPlay.onclick = () => {
 
 function toggleTrackPlay(path){
   fetch('/api/player/toggle?path=' + encodeURIComponent(path), { method: 'POST' })
-    .then(r => r.json())
-    .then(d => {
-      if(d.status === 'ok') fetchNow();
-    }).catch(()=>{});
+    .then(async r => {
+      const d = await r.json().catch(() => ({}));
+      if(!r.ok || d.status !== 'ok'){
+        showToast(d.error || 'Playback request failed');
+      } else {
+        fetchNow();
+      }
+    }).catch(e => {
+      showToast('Playback error: ' + (e.message || 'connection failed'));
+    });
 }
 
 function updateSidebarPlayButton(){
@@ -401,13 +420,19 @@ btnConfirmAddPlist.onclick = () => {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path: activeSelectedTrack.path })
-  }).then(r => r.json()).then(d => {
-    if(d.status === 'ok'){
+  }).then(async r => {
+    const d = await r.json().catch(() => ({}));
+    if(!r.ok || d.status !== 'ok'){
+      showToast(d.error || 'Failed to add track to playlist');
+    } else {
+      showToast('Track added to playlist', 'success');
       sidebarAddPlistBox.style.display = 'none';
       openTrackDrawer(activeSelectedTrack);
       loadPlaylists();
     }
-  }).catch(()=>{});
+  }).catch(e => {
+    showToast('Error adding track: ' + (e.message || 'connection failed'));
+  });
 };
 
 btnSidebarMapDisc.onclick = () => {
@@ -420,14 +445,19 @@ btnSidebarDelete.onclick = () => {
   if(!activeSelectedTrack) return;
   if(!confirm('Permanently delete ' + activeSelectedTrack.name + '?')) return;
   fetch('/api/delete?path=' + encodeURIComponent(activeSelectedTrack.path), { method: 'DELETE' })
-    .then(r => r.json())
-    .then(d => {
-      if(d.status === 'ok'){
+    .then(async r => {
+      const d = await r.json().catch(() => ({}));
+      if(!r.ok || d.status !== 'ok'){
+        showToast(d.error || 'Failed to delete file');
+      } else {
+        showToast('File deleted', 'success');
         closeAllDrawers();
         loadLibrary();
         if(viewFiles.classList.contains('active')) loadFolder(currentFolder);
       }
-    }).catch(()=>{});
+    }).catch(e => {
+      showToast('Delete error: ' + (e.message || 'request failed'));
+    });
 };
 
 function loadPlaylists(){
@@ -475,12 +505,18 @@ btnConfirmNewPlist.onclick = () => {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({name: n})
-  }).then(r=>r.json()).then(d=>{
-    if(d.status === 'ok'){
+  }).then(async r => {
+    const d = await r.json().catch(() => ({}));
+    if(!r.ok || d.status !== 'ok'){
+      showToast(d.error || ('Failed to create playlist (' + r.status + ')'));
+    } else {
+      showToast('Playlist created', 'success');
       newPlistForm.style.display = 'none';
       loadPlaylists();
     }
-  }).catch(()=>{});
+  }).catch(e => {
+    showToast('Network error: ' + (e.message || 'could not create playlist'));
+  });
 };
 
 function openPlaylist(name){
@@ -562,14 +598,20 @@ btnSavePlistRename.onclick = () => {
     method: 'PUT',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({newName: n})
-  }).then(r=>r.json()).then(d=>{
-    if(d.status === 'ok'){
+  }).then(async r => {
+    const d = await r.json().catch(() => ({}));
+    if(!r.ok || d.status !== 'ok'){
+      showToast(d.error || 'Failed to rename playlist');
+    } else {
+      showToast('Playlist renamed', 'success');
       currentPlaylist = n;
       plistHeadTitle.textContent = n;
       closeAllDrawers();
       loadPlaylists();
     }
-  }).catch(()=>{});
+  }).catch(e => {
+    showToast('Rename error: ' + (e.message || 'connection failed'));
+  });
 };
 
 btnMapPlistDisc.onclick = () => {
@@ -581,13 +623,18 @@ btnMapPlistDisc.onclick = () => {
 btnDeletePlist.onclick = () => {
   if(!confirm('Permanently delete playlist ' + currentPlaylist + '?')) return;
   fetch('/api/playlists/' + encodeURIComponent(currentPlaylist), { method: 'DELETE' })
-    .then(r=>r.json())
-    .then(d=>{
-      if(d.status === 'ok'){
+    .then(async r => {
+      const d = await r.json().catch(() => ({}));
+      if(!r.ok || d.status !== 'ok'){
+        showToast(d.error || 'Failed to delete playlist');
+      } else {
+        showToast('Playlist deleted', 'success');
         closeAllDrawers();
         btnBackPlaylists.click();
       }
-    }).catch(()=>{});
+    }).catch(e => {
+      showToast('Delete error: ' + (e.message || 'connection failed'));
+    });
 };
 
 function renderBreadcrumbs(){
@@ -648,12 +695,20 @@ function loadFolder(path){
         delBtn.textContent = '\u2715';
         delBtn.onclick = (e) => {
           e.stopPropagation();
-          if(!confirm('Permanently delete ' + full + '?')) return;
+          const targetType = n.type === 'dir' ? 'empty folder' : 'file';
+          if(!confirm('Delete ' + targetType + ' ' + full + '?')) return;
           fetch('/api/delete?path=' + encodeURIComponent(full), { method: 'DELETE' })
-            .then(r=>r.json())
-            .then(d=>{
-              if(d.status === 'ok') loadFolder(currentFolder);
-            }).catch(()=>{});
+            .then(async r => {
+              const d = await r.json().catch(() => ({}));
+              if(!r.ok || d.status !== 'ok'){
+                showToast(d.error || 'Failed to delete item');
+              } else {
+                showToast('Deleted ' + n.name, 'success');
+                loadFolder(currentFolder);
+              }
+            }).catch(err => {
+              showToast('Delete error: ' + (err.message || 'connection failed'));
+            });
         };
         actions.appendChild(delBtn);
 
@@ -683,12 +738,21 @@ btnConfirmNewFolder.onclick = () => {
   const n = newFolderNameInput.value.trim();
   if(!n) return;
   const p = (currentFolder === '/' ? '' : currentFolder) + '/' + n;
-  fetch('/api/upload?path=' + encodeURIComponent(p), {
+  fetch('/api/folders', {
     method: 'POST',
-    body: new FormData()
-  }).finally(() => {
-    newFolderForm.style.display = 'none';
-    loadFolder(currentFolder);
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: p })
+  }).then(async r => {
+    const d = await r.json().catch(() => ({}));
+    if(!r.ok || d.status !== 'ok'){
+      showToast(d.error || ('Failed to create folder (' + r.status + ')'));
+    } else {
+      showToast('Folder created', 'success');
+      newFolderForm.style.display = 'none';
+      loadFolder(currentFolder);
+    }
+  }).catch(e => {
+    showToast('Network error: ' + (e.message || 'could not create folder'));
   });
 };
 
@@ -697,7 +761,7 @@ fileInput.onchange = () => {
   if(!fileInput.files || fileInput.files.length === 0) return;
   const file = fileInput.files[0];
   if(file.size > 31457280){
-    alert('Exceeds 30MB limit.');
+    showToast('Exceeds 30MB limit.');
     fileInput.value = '';
     return;
   }
@@ -719,13 +783,25 @@ fileInput.onchange = () => {
     pBox.style.display = 'none';
     btnUp.disabled = false;
     fileInput.value = '';
-    loadFolder(currentFolder);
-    loadLibrary();
+    if(xhr.status >= 200 && xhr.status < 300){
+      showToast('File uploaded successfully', 'success');
+      loadFolder(currentFolder);
+      loadLibrary();
+    } else {
+      let msg = 'Upload failed (' + xhr.status + ')';
+      try {
+        const res = JSON.parse(xhr.responseText);
+        if(res.error) msg = 'Upload error: ' + res.error;
+      } catch(_) {}
+      showToast(msg);
+      loadFolder(currentFolder);
+    }
   };
   xhr.onerror = () => {
     pBox.style.display = 'none';
     btnUp.disabled = false;
     fileInput.value = '';
+    showToast('Upload network connection error');
   };
   const form = new FormData();
   form.append('file', file, file.name);
@@ -812,9 +888,18 @@ function renderDiscs(){
     delBtn.onclick = () => {
       if(!confirm('Unmap disc ' + d.uid + '?')) return;
       fetch('/api/discs?uid=' + encodeURIComponent(d.uid), { method: 'DELETE' })
-        .then(r=>r.json()).then(res=>{
-          if(res.status === 'ok'){ loadDiscs(); fetchNow(); }
-        }).catch(()=>{});
+        .then(async r => {
+          const res = await r.json().catch(() => ({}));
+          if(!r.ok || res.status !== 'ok'){
+            showToast(res.error || 'Failed to unmap disc');
+          } else {
+            showToast('Disc unmapped', 'success');
+            loadDiscs();
+            fetchNow();
+          }
+        }).catch(err => {
+          showToast('Error unmapping disc: ' + (err.message || 'request failed'));
+        });
     };
     actions.appendChild(editBtn);
     actions.appendChild(delBtn);
@@ -869,19 +954,28 @@ btnModalSave.onclick = () => {
   const label = modalLabelInput.value.trim();
   const type = modalTypeSelect.value;
   const target = modalTargetSelect.value;
-  if(!target) return;
+  if(!target) {
+    showToast('Please select a target for mapping');
+    return;
+  }
 
   fetch('/api/discs/map', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ uid, type, target, label })
-  }).then(r=>r.json()).then(d=>{
-    if(d.status === 'ok'){
+  }).then(async r => {
+    const d = await r.json().catch(() => ({}));
+    if(!r.ok || d.status !== 'ok'){
+      showToast(d.error || 'Failed to map disc');
+    } else {
+      showToast('Disc mapped successfully', 'success');
       closeAllDrawers();
       loadDiscs();
       fetchNow();
     }
-  }).catch(()=>{});
+  }).catch(e => {
+    showToast('Mapping error: ' + (e.message || 'connection failed'));
+  });
 };
 
 switchView(getQueryTab(), false);
