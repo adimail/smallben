@@ -5,7 +5,6 @@
 #include <SPI.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
-#include <vector>
 
 enum class StorageResult {
 	Ok,
@@ -341,7 +340,6 @@ inline bool initStorage() {
 		}
 	}
 	performBootCleanup();
-	refreshSdStatsDirect();
 	return true;
 }
 
@@ -368,7 +366,6 @@ inline StorageResult createDirectory(const String &path) {
 	if (!SD.mkdir(p)) {
 		return StorageResult::WriteFailed;
 	}
-	refreshSdStatsDirect();
 	return StorageResult::Ok;
 }
 
@@ -399,7 +396,6 @@ inline StorageResult deleteFile(const String &path) {
 	if (!SD.remove(p)) {
 		return StorageResult::DeleteFailed;
 	}
-	refreshSdStatsDirect();
 	return StorageResult::Ok;
 }
 
@@ -434,7 +430,6 @@ inline StorageResult deleteEmptyDirectory(const String &path) {
 	if (!SD.rmdir(p)) {
 		return StorageResult::DeleteFailed;
 	}
-	refreshSdStatsDirect();
 	return StorageResult::Ok;
 }
 
@@ -491,7 +486,6 @@ inline StorageResult renameStoragePath(const String &oldPath, const String &newP
 	if (!SD.exists(dst)) {
 		return StorageResult::VerifyFailed;
 	}
-	refreshSdStatsDirect();
 	return StorageResult::Ok;
 }
 
@@ -527,64 +521,6 @@ inline StorageResult replaceFileSafelyUnderGuard(const String &tempPath, const S
 	return StorageResult::Ok;
 }
 
-inline StorageResult writeTextAtomic(const String &destPath, const String &content) {
-	heapLog("writeTextAtomic:enter");
-	if (!g_sdReady)
-		return StorageResult::StorageUnavailable;
-	String dst = normalizePath(destPath);
-	if (!isValidPath(dst))
-		return StorageResult::InvalidPath;
-	if (isAudioPathCurrentlyActive(dst))
-		return StorageResult::Active;
-
-	uint64_t freeBytes = getSdFreeBytes();
-	if (freeBytes < (uint64_t)content.length() + MIN_SD_FREE_MARGIN) {
-		return StorageResult::NoSpace;
-	}
-
-	String tempPath = dst + ".tmp";
-	SdGuard guard;
-
-	if (SD.exists(tempPath)) {
-		SD.remove(tempPath);
-	}
-	File f = SD.open(tempPath, FILE_WRITE);
-	if (!f) {
-		heapLog("writeTextAtomic:OPEN FAILED");
-		return StorageResult::OpenFailed;
-	}
-	if (content.length() > 0) {
-		size_t written = f.print(content);
-		if (written != content.length()) {
-			heapLog("writeTextAtomic:WRITE FAILED");
-			f.close();
-			SD.remove(tempPath);
-			return StorageResult::WriteFailed;
-		}
-	}
-	f.close();
-	heapLog("writeTextAtomic:after write+close");
-
-	File verifyF = SD.open(tempPath, FILE_READ);
-	if (!verifyF) {
-		SD.remove(tempPath);
-		return StorageResult::VerifyFailed;
-	}
-	size_t writtenSize = verifyF.size();
-	verifyF.close();
-
-	if (writtenSize != content.length()) {
-		SD.remove(tempPath);
-		return StorageResult::VerifyFailed;
-	}
-
-	StorageResult res = replaceFileSafelyUnderGuard(tempPath, dst);
-	if (res == StorageResult::Ok) {
-		refreshSdStatsDirect();
-	}
-	return res;
-}
-
 inline StorageResult commitUploadFile(const String &tempPath, const String &destPath,
 									  size_t expectedSize) {
 	if (!g_sdReady)
@@ -614,32 +550,7 @@ inline StorageResult commitUploadFile(const String &tempPath, const String &dest
 		return StorageResult::VerifyFailed;
 	}
 
-	StorageResult res = replaceFileSafelyUnderGuard(tmp, dst);
-	if (res == StorageResult::Ok) {
-		refreshSdStatsDirect();
-	}
-	return res;
-}
-
-inline StorageResult readStorageText(const String &path, String &outContent) {
-	if (!g_sdReady)
-		return StorageResult::StorageUnavailable;
-	String p = normalizePath(path);
-	if (!isValidPath(p))
-		return StorageResult::InvalidPath;
-	SdGuard guard;
-	if (!SD.exists(p)) {
-		return StorageResult::NotFound;
-	}
-	File f = SD.open(p, FILE_READ);
-	if (!f || f.isDirectory()) {
-		if (f)
-			f.close();
-		return StorageResult::OpenFailed;
-	}
-	outContent = f.readString();
-	f.close();
-	return StorageResult::Ok;
+	return replaceFileSafelyUnderGuard(tmp, dst);
 }
 
 inline StorageResult createPlaylist(const String &name) {
@@ -666,7 +577,6 @@ inline StorageResult createPlaylist(const String &name) {
 	if (!SD.exists(path)) {
 		return StorageResult::VerifyFailed;
 	}
-	refreshSdStatsDirect();
 	return StorageResult::Ok;
 }
 
@@ -685,25 +595,52 @@ inline StorageResult deletePlaylist(const String &name) {
 	return deleteFile(path);
 }
 
-inline std::vector<String> getPlaylistTrackList(const String &name) {
-	std::vector<String> tracks;
+inline size_t getPlaylistTrackCount(const String &name) {
 	if (!g_sdReady || !isValidPlaylistName(name)) {
-		return tracks;
+		return 0;
 	}
 	String path = getPlaylistPath(name);
 	SdGuard guard;
 	File f = SD.open(path, FILE_READ);
 	if (!f)
-		return tracks;
+		return 0;
+	size_t count = 0;
 	while (f.available()) {
 		String line = f.readStringUntil('\n');
 		line.trim();
 		if (line.length() > 0 && !line.startsWith("#")) {
-			tracks.push_back(line);
+			count++;
 		}
 	}
 	f.close();
-	return tracks;
+	return count;
+}
+
+inline bool getPlaylistTrackAt(const String &name, size_t targetIndex, String &outTrack) {
+	if (!g_sdReady || !isValidPlaylistName(name)) {
+		return false;
+	}
+	String path = getPlaylistPath(name);
+	SdGuard guard;
+	File f = SD.open(path, FILE_READ);
+	if (!f)
+		return false;
+	size_t index = 0;
+	bool found = false;
+	while (f.available()) {
+		String line = f.readStringUntil('\n');
+		line.trim();
+		if (line.length() > 0 && !line.startsWith("#")) {
+			if (index == targetIndex) {
+				outTrack = line;
+				found = true;
+				break;
+			}
+			index++;
+		}
+	}
+	f.close();
+	return found;
 }
 
 inline StorageResult appendPlaylistTrack(const String &name, const String &trackPath) {
@@ -751,35 +688,7 @@ inline StorageResult appendPlaylistTrack(const String &name, const String &track
 	if (written == 0) {
 		return StorageResult::WriteFailed;
 	}
-	refreshSdStatsDirect();
 	return StorageResult::Ok;
-}
-
-inline StorageResult overwritePlaylistTracks(const String &name,
-											 const std::vector<String> &tracks) {
-	if (!g_sdReady)
-		return StorageResult::StorageUnavailable;
-	if (!isValidPlaylistName(name))
-		return StorageResult::InvalidPath;
-	if (tracks.size() > MAX_PLAYLIST_TRACKS)
-		return StorageResult::NoSpace;
-
-	String path = getPlaylistPath(name);
-	{
-		SdGuard guard;
-		for (const auto &t : tracks) {
-			String tp = normalizePath(t);
-			if (!isValidPath(tp) || !isMp3(tp) || !SD.exists(tp)) {
-				return StorageResult::NotFound;
-			}
-		}
-	}
-
-	String content = "";
-	for (const auto &t : tracks) {
-		content += normalizePath(t) + "\n";
-	}
-	return writeTextAtomic(path, content);
 }
 
 template <typename Callback> inline void iterateDirectory(File dir, Callback cb) {
@@ -801,28 +710,18 @@ template <typename Callback> inline bool iteratePlaylistTracks(const String &nam
 	if (!g_sdReady || !isValidPlaylistName(name))
 		return false;
 	String path = getPlaylistPath(name);
-	std::vector<String> lines;
-	{
-		SdGuard guard;
-		File f = SD.open(path, FILE_READ);
-		if (!f)
-			return false;
-		while (f.available()) {
-			String trackPath = f.readStringUntil('\n');
-			trackPath.trim();
-			if (trackPath.length() > 0 && !trackPath.startsWith("#")) {
-				lines.push_back(trackPath);
-			}
-		}
-		f.close();
-	}
-	for (const String &trackPath : lines) {
-		int lastSlash = trackPath.lastIndexOf('/');
-		String trackName = (lastSlash != -1) ? trackPath.substring(lastSlash + 1) : trackPath;
-		size_t sz = 0;
-		bool exists = false;
-		{
-			SdGuard guard;
+	SdGuard guard;
+	File f = SD.open(path, FILE_READ);
+	if (!f)
+		return false;
+	while (f.available()) {
+		String trackPath = f.readStringUntil('\n');
+		trackPath.trim();
+		if (trackPath.length() > 0 && !trackPath.startsWith("#")) {
+			int lastSlash = trackPath.lastIndexOf('/');
+			String trackName = (lastSlash != -1) ? trackPath.substring(lastSlash + 1) : trackPath;
+			size_t sz = 0;
+			bool exists = false;
 			if (SD.exists(trackPath)) {
 				File tf = SD.open(trackPath, FILE_READ);
 				if (tf) {
@@ -831,8 +730,9 @@ template <typename Callback> inline bool iteratePlaylistTracks(const String &nam
 					tf.close();
 				}
 			}
+			cb(trackName, trackPath, sz, exists);
 		}
-		cb(trackName, trackPath, sz, exists);
 	}
+	f.close();
 	return true;
 }

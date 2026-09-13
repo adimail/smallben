@@ -10,7 +10,6 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
-#include <vector>
 
 enum class AudioCmdType { Play, PlayPlaylist, Stop, Toggle, ReleaseI2S, ReclaimI2S, SetVolume };
 
@@ -220,6 +219,7 @@ inline bool startTrackInternal(const char *path) {
 }
 
 inline bool startPlaylistInternal(const char *name) {
+	heapLog("startPlaylistInternal:enter");
 	stopAudioInternal();
 	if (!name || strlen(name) == 0) {
 		return false;
@@ -228,8 +228,8 @@ inline bool startPlaylistInternal(const char *name) {
 	if (!isSafePlaylistName(pName)) {
 		return false;
 	}
-	std::vector<String> tracks = getPlaylistTrackList(pName);
-	if (tracks.empty()) {
+	size_t count = getPlaylistTrackCount(pName);
+	if (count == 0) {
 		return false;
 	}
 	audioIsPlaylist = true;
@@ -238,12 +238,15 @@ inline bool startPlaylistInternal(const char *name) {
 	audioCurrentPlaylistIndex = 0;
 
 	size_t attempts = 0;
-	while (attempts < tracks.size()) {
-		String trackPath = tracks[audioCurrentPlaylistIndex];
-		if (startTrackInternal(trackPath.c_str())) {
-			return true;
+	while (attempts < count) {
+		String trackPath;
+		if (getPlaylistTrackAt(pName, audioCurrentPlaylistIndex, trackPath)) {
+			if (startTrackInternal(trackPath.c_str())) {
+				heapLog("startPlaylistInternal:track started");
+				return true;
+			}
 		}
-		audioCurrentPlaylistIndex = (audioCurrentPlaylistIndex + 1) % tracks.size();
+		audioCurrentPlaylistIndex = (audioCurrentPlaylistIndex + 1) % count;
 		attempts++;
 	}
 	stopAudioInternal();
@@ -251,22 +254,26 @@ inline bool startPlaylistInternal(const char *name) {
 }
 
 inline void onTrackFinishedInternal() {
+	heapLog("onTrackFinishedInternal:enter");
 	if (audioIsPlaylist && strlen(audioCurrentPlaylistName) > 0) {
-		std::vector<String> tracks = getPlaylistTrackList(audioCurrentPlaylistName);
-		if (tracks.empty()) {
+		size_t count = getPlaylistTrackCount(audioCurrentPlaylistName);
+		if (count == 0) {
 			stopAudioInternal();
 			return;
 		}
-		audioCurrentPlaylistIndex = (audioCurrentPlaylistIndex + 1) % tracks.size();
+		audioCurrentPlaylistIndex = (audioCurrentPlaylistIndex + 1) % count;
 		size_t attempts = 0;
 		bool started = false;
-		while (attempts < tracks.size()) {
-			String nextTrack = tracks[audioCurrentPlaylistIndex];
-			if (startTrackInternal(nextTrack.c_str())) {
-				started = true;
-				break;
+		while (attempts < count) {
+			String nextTrack;
+			if (getPlaylistTrackAt(audioCurrentPlaylistName, audioCurrentPlaylistIndex,
+								   nextTrack)) {
+				if (startTrackInternal(nextTrack.c_str())) {
+					started = true;
+					break;
+				}
 			}
-			audioCurrentPlaylistIndex = (audioCurrentPlaylistIndex + 1) % tracks.size();
+			audioCurrentPlaylistIndex = (audioCurrentPlaylistIndex + 1) % count;
 			attempts++;
 		}
 		if (!started) {
@@ -445,8 +452,7 @@ inline bool requestAudioVolume(float gain) {
 	cmd.type = AudioCmdType::SetVolume;
 	cmd.path[0] = '\0';
 	cmd.gain = gain;
-	bool sent = (xQueueSend(audioCommandQueue, &cmd, pdMS_TO_TICKS(50)) == pdTRUE);
-	return sent;
+	return (xQueueSend(audioCommandQueue, &cmd, pdMS_TO_TICKS(50)) == pdTRUE);
 }
 
 inline bool requestAudioReleaseI2SBlocking() {

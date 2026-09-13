@@ -8,7 +8,6 @@
 #include <Arduino.h>
 #include <WebServer.h>
 #include <WiFi.h>
-#include <vector>
 
 WebServer server(HTTP_PORT);
 
@@ -138,49 +137,6 @@ inline String extractJsonString(const String &json, const String &key) {
 	return "";
 }
 
-inline std::vector<String> extractJsonArray(const String &json, const String &key) {
-	std::vector<String> res;
-	String needle = "\"" + key + "\"";
-	int kpos = json.indexOf(needle);
-	if (kpos == -1)
-		return res;
-	int b1 = json.indexOf('[', kpos + needle.length());
-	int b2 = json.lastIndexOf(']');
-	if (b1 == -1 || b2 == -1 || b2 <= b1)
-		return res;
-	String arr = json.substring(b1 + 1, b2);
-	int cur = 0;
-	while (cur < (int)arr.length()) {
-		int q1 = arr.indexOf('"', cur);
-		if (q1 == -1)
-			break;
-		String item = "";
-		bool escape = false;
-		int endIdx = -1;
-		for (int i = q1 + 1; i < (int)arr.length(); i++) {
-			char c = arr[i];
-			if (escape) {
-				item += c;
-				escape = false;
-			} else if (c == '\\') {
-				escape = true;
-			} else if (c == '"') {
-				endIdx = i;
-				break;
-			} else {
-				item += c;
-			}
-		}
-		if (endIdx != -1) {
-			res.push_back(item);
-			cur = endIdx + 1;
-		} else {
-			break;
-		}
-	}
-	return res;
-}
-
 inline void handleRoot() { streamDashboard(server); }
 
 inline void handleNow() {
@@ -233,19 +189,18 @@ inline void handleNow() {
 }
 
 inline void handleApiDiscsGet() {
-	std::vector<DiscMapping> list = getDiscMappingsSnapshot();
 	server.setContentLength(CONTENT_LENGTH_UNKNOWN);
 	server.send(200, "application/json", "");
 	server.sendContent("[");
 	bool first = true;
-	for (const auto &item : list) {
+	streamDiscMappingsFromSd([&](const DiscMappingRecord &item) {
 		if (!first)
 			server.sendContent(",");
 		first = false;
 		server.sendContent("{\"uid\":\"" + jsonEscape(item.uid) + "\",\"type\":\"" +
 						   jsonEscape(item.type) + "\",\"target\":\"" + jsonEscape(item.target) +
 						   "\",\"label\":\"" + jsonEscape(item.label) + "\"}");
-	}
+	});
 	server.sendContent("]");
 	server.sendContent("");
 }
@@ -268,6 +223,7 @@ inline void handleApiDiscsMap() {
 }
 
 inline void handleApiDiscsDelete() {
+	heapLog("handleApiDiscsDelete:enter");
 	String uid = "";
 	if (server.hasArg("uid")) {
 		uid = server.arg("uid");
@@ -279,10 +235,47 @@ inline void handleApiDiscsDelete() {
 		uid = extractJsonString(server.arg("plain"), "uid");
 	}
 	StorageResult res = unmapDisc(uid);
+	heapLog("handleApiDiscsDelete:after unmapDisc");
 	sendStorageResult(res);
 }
 
+inline void streamMp3Entries(const String &dirPath, bool &first) {
+	SdGuard guard;
+	File dir = SD.open(dirPath);
+	if (!dir || !dir.isDirectory()) {
+		if (dir)
+			dir.close();
+		return;
+	}
+
+	while (true) {
+		File entry = dir.openNextFile();
+		if (!entry)
+			break;
+		String name = entry.name();
+		bool isDir = entry.isDirectory();
+		size_t sz = entry.size();
+		entry.close();
+
+		if (isSystemOrHidden(name))
+			continue;
+
+		String fullPath = (dirPath == "/" ? "" : dirPath) + "/" + name;
+		if (isDir) {
+			streamMp3Entries(fullPath, first);
+		} else if (isMp3(name)) {
+			if (!first)
+				server.sendContent(",");
+			first = false;
+			server.sendContent("{\"name\":\"" + jsonEscape(name) + "\",\"path\":\"" +
+							   jsonEscape(fullPath) + "\",\"size\":" + String(sz) + "}");
+		}
+	}
+	dir.close();
+}
+
 inline void handleApiMp3() {
+	heapLog("handleApiMp3:enter");
 	if (!isStorageReady()) {
 		server.send(503, "application/json", "[]");
 		return;
@@ -291,50 +284,10 @@ inline void handleApiMp3() {
 	server.send(200, "application/json", "");
 	server.sendContent("[");
 	bool first = true;
-	std::vector<String> dirs;
-	dirs.push_back("/");
-
-	while (!dirs.empty()) {
-		String currentDir = dirs.back();
-		dirs.pop_back();
-
-		std::vector<String> subDirs;
-		{
-			SdGuard guard;
-			File dir = SD.open(currentDir);
-			if (dir && dir.isDirectory()) {
-				while (true) {
-					File entry = dir.openNextFile();
-					if (!entry)
-						break;
-					String name = entry.name();
-					if (!isSystemOrHidden(name)) {
-						String fullPath = (currentDir == "/" ? "" : currentDir) + "/" + name;
-						if (entry.isDirectory()) {
-							subDirs.push_back(fullPath);
-						} else if (isMp3(name)) {
-							size_t sz = entry.size();
-							if (!first)
-								server.sendContent(",");
-							first = false;
-							server.sendContent("{\"name\":\"" + jsonEscape(name) +
-											   "\",\"path\":\"" + jsonEscape(fullPath) +
-											   "\",\"size\":" + String(sz) + "}");
-						}
-					}
-					entry.close();
-				}
-				dir.close();
-			}
-		}
-		for (const auto &sd : subDirs) {
-			dirs.push_back(sd);
-		}
-		vTaskDelay(pdMS_TO_TICKS(1));
-	}
-
+	streamMp3Entries("/", first);
 	server.sendContent("]");
 	server.sendContent("");
+	heapLog("handleApiMp3:done");
 }
 
 inline void handleApiTrackPlaylists() {
@@ -353,56 +306,47 @@ inline void handleApiTrackPlaylists() {
 	bool first = true;
 
 	if (isStorageReady()) {
-		std::vector<String> playlistNames;
-		{
-			SdGuard guard;
-			File dir = SD.open("/playlists");
-			if (dir && dir.isDirectory()) {
-				while (true) {
-					File entry = dir.openNextFile();
-					if (!entry)
-						break;
-					String name = entry.name();
-					String lower = name;
-					lower.toLowerCase();
-					if (!entry.isDirectory() && lower.endsWith(".m3u") && !name.startsWith(".") &&
-						!name.startsWith("._")) {
-						playlistNames.push_back(name);
-					}
-					entry.close();
-				}
-				dir.close();
-			}
-		}
+		SdGuard guard;
+		File dir = SD.open("/playlists");
+		if (dir && dir.isDirectory()) {
+			while (true) {
+				File entry = dir.openNextFile();
+				if (!entry)
+					break;
+				String name = entry.name();
+				bool isDir = entry.isDirectory();
+				entry.close();
 
-		for (const String &pName : playlistNames) {
-			String fullPath = "/playlists/" + pName;
-			bool found = false;
-			{
-				SdGuard guard;
-				File f = SD.open(fullPath, FILE_READ);
-				if (f) {
-					while (f.available()) {
-						String line = f.readStringUntil('\n');
-						line.trim();
-						if (line == path) {
-							found = true;
-							break;
+				String lower = name;
+				lower.toLowerCase();
+				if (!isDir && lower.endsWith(".m3u") && !isSystemOrHidden(name)) {
+					String fullPath = "/playlists/" + name;
+					File f = SD.open(fullPath, FILE_READ);
+					bool found = false;
+					if (f) {
+						while (f.available()) {
+							String line = f.readStringUntil('\n');
+							line.trim();
+							if (line == path) {
+								found = true;
+								break;
+							}
 						}
+						f.close();
 					}
-					f.close();
+					if (found) {
+						String base = name;
+						if (base.endsWith(".m3u")) {
+							base = base.substring(0, base.length() - 4);
+						}
+						if (!first)
+							server.sendContent(",");
+						first = false;
+						server.sendContent("\"" + jsonEscape(base) + "\"");
+					}
 				}
 			}
-			if (found) {
-				String base = pName;
-				if (base.endsWith(".m3u")) {
-					base = base.substring(0, base.length() - 4);
-				}
-				if (!first)
-					server.sendContent(",");
-				first = false;
-				server.sendContent("\"" + jsonEscape(base) + "\"");
-			}
+			dir.close();
 		}
 	}
 
@@ -418,43 +362,34 @@ inline void handleApiTree() {
 		server.send(400, "application/json", "{\"error\":\"invalid path\"}");
 		return;
 	}
-	struct TreeNode {
-		String name;
-		bool isDir;
-		size_t size;
-	};
-	std::vector<TreeNode> nodes;
-	{
-		SdGuard guard;
-		File dir = SD.open(normalizePath(path));
-		if (!dir || !dir.isDirectory()) {
-			if (dir)
-				dir.close();
-			server.send(404, "application/json", "[]");
-			return;
-		}
-		iterateDirectory(dir, [&](const String &name, bool isDir, size_t sz) {
-			if (nodes.size() < 256) {
-				nodes.push_back({name, isDir, sz});
-			}
-		});
-		dir.close();
+
+	SdGuard guard;
+	File dir = SD.open(normalizePath(path));
+	if (!dir || !dir.isDirectory()) {
+		if (dir)
+			dir.close();
+		server.send(404, "application/json", "[]");
+		return;
 	}
+
 	server.setContentLength(CONTENT_LENGTH_UNKNOWN);
 	server.send(200, "application/json", "");
 	server.sendContent("[");
 	bool first = true;
-	for (const auto &n : nodes) {
+
+	iterateDirectory(dir, [&](const String &name, bool isDir, size_t sz) {
 		if (!first)
 			server.sendContent(",");
 		first = false;
-		if (n.isDir) {
-			server.sendContent("{\"name\":\"" + jsonEscape(n.name) + "\",\"type\":\"dir\"}");
+		if (isDir) {
+			server.sendContent("{\"name\":\"" + jsonEscape(name) + "\",\"type\":\"dir\"}");
 		} else {
-			server.sendContent("{\"name\":\"" + jsonEscape(n.name) +
-							   "\",\"type\":\"file\",\"size\":" + String(n.size) + "}");
+			server.sendContent("{\"name\":\"" + jsonEscape(name) +
+							   "\",\"type\":\"file\",\"size\":" + String(sz) + "}");
 		}
-	}
+	});
+
+	dir.close();
 	server.sendContent("]");
 	server.sendContent("");
 }
@@ -621,7 +556,7 @@ inline void handleFileUploadProcess() {
 		}
 	} else if (upload.status == UPLOAD_FILE_WRITE) {
 		static int writeCount = 0;
-		if ((writeCount++ % 20) == 0) { // don't flood serial every single chunk
+		if ((writeCount++ % 20) == 0) {
 			heapLog("upload:WRITE tick");
 		}
 		if (!uploadAborted && uploadFile) {
@@ -709,54 +644,48 @@ inline void handleApiPlaylistsGet() {
 		server.send(503, "application/json", "[]");
 		return;
 	}
-	std::vector<String> playlistNames;
-	{
-		SdGuard guard;
-		File dir = SD.open("/playlists");
-		if (dir && dir.isDirectory()) {
-			while (true) {
-				File entry = dir.openNextFile();
-				if (!entry)
-					break;
-				String name = entry.name();
-				String lower = name;
-				lower.toLowerCase();
-				if (!entry.isDirectory() && lower.endsWith(".m3u") && !name.startsWith(".") &&
-					!name.startsWith("._")) {
-					playlistNames.push_back(name);
-				}
-				entry.close();
-			}
-			dir.close();
-		}
-	}
 	server.setContentLength(CONTENT_LENGTH_UNKNOWN);
 	server.send(200, "application/json", "");
 	server.sendContent("[");
 	bool first = true;
-	for (const String &name : playlistNames) {
-		String fullPath = "/playlists/" + name;
-		int count = 0;
-		{
-			SdGuard guard;
-			File f = SD.open(fullPath, FILE_READ);
-			if (f) {
-				while (f.available()) {
-					String line = f.readStringUntil('\n');
-					line.trim();
-					if (line.length() > 0 && !line.startsWith("#")) {
-						count++;
+
+	SdGuard guard;
+	File dir = SD.open("/playlists");
+	if (dir && dir.isDirectory()) {
+		while (true) {
+			File entry = dir.openNextFile();
+			if (!entry)
+				break;
+			String name = entry.name();
+			bool isDir = entry.isDirectory();
+			entry.close();
+
+			String lower = name;
+			lower.toLowerCase();
+			if (!isDir && lower.endsWith(".m3u") && !isSystemOrHidden(name)) {
+				String fullPath = "/playlists/" + name;
+				int count = 0;
+				File f = SD.open(fullPath, FILE_READ);
+				if (f) {
+					while (f.available()) {
+						String line = f.readStringUntil('\n');
+						line.trim();
+						if (line.length() > 0 && !line.startsWith("#")) {
+							count++;
+						}
 					}
+					f.close();
 				}
-				f.close();
+				if (!first)
+					server.sendContent(",");
+				first = false;
+				server.sendContent("{\"name\":\"" + jsonEscape(name) +
+								   "\",\"trackCount\":" + String(count) + "}");
 			}
 		}
-		if (!first)
-			server.sendContent(",");
-		first = false;
-		server.sendContent("{\"name\":\"" + jsonEscape(name) +
-						   "\",\"trackCount\":" + String(count) + "}");
+		dir.close();
 	}
+
 	server.sendContent("]");
 	server.sendContent("");
 }
@@ -817,9 +746,87 @@ inline void handleApiPlaylistTracksUpdate() {
 		return;
 	}
 	String id = urldecode(server.arg("id"));
+	if (!isValidPlaylistName(id)) {
+		server.send(400, "application/json", "{\"error\":\"invalid id\"}");
+		return;
+	}
+
 	String body = server.arg("plain");
-	std::vector<String> tracks = extractJsonArray(body, "tracks");
-	StorageResult res = overwritePlaylistTracks(id, tracks);
+	String needle = "\"tracks\"";
+	int kpos = body.indexOf(needle);
+	if (kpos == -1) {
+		server.send(400, "application/json", "{\"error\":\"missing tracks\"}");
+		return;
+	}
+	int b1 = body.indexOf('[', kpos + needle.length());
+	int b2 = body.lastIndexOf(']');
+	if (b1 == -1 || b2 == -1 || b2 <= b1) {
+		server.send(400, "application/json", "{\"error\":\"invalid tracks format\"}");
+		return;
+	}
+
+	String destPath = getPlaylistPath(id);
+	String tempPath = destPath + ".tmp";
+
+	SdGuard guard;
+	if (SD.exists(tempPath)) {
+		SD.remove(tempPath);
+	}
+	File outF = SD.open(tempPath, FILE_WRITE);
+	if (!outF) {
+		server.send(500, "application/json", "{\"error\":\"open failed\"}");
+		return;
+	}
+
+	int cur = b1 + 1;
+	size_t count = 0;
+	bool ok = true;
+	while (cur < b2) {
+		int q1 = body.indexOf('"', cur);
+		if (q1 == -1 || q1 >= b2)
+			break;
+		String trackPath = "";
+		bool escape = false;
+		int endIdx = -1;
+		for (int i = q1 + 1; i < b2; i++) {
+			char c = body[i];
+			if (escape) {
+				trackPath += c;
+				escape = false;
+			} else if (c == '\\') {
+				escape = true;
+			} else if (c == '"') {
+				endIdx = i;
+				break;
+			} else {
+				trackPath += c;
+			}
+		}
+		if (endIdx == -1)
+			break;
+		cur = endIdx + 1;
+
+		String tp = normalizePath(trackPath);
+		if (!isValidPath(tp) || !isMp3(tp) || !SD.exists(tp)) {
+			ok = false;
+			break;
+		}
+		if (++count > MAX_PLAYLIST_TRACKS) {
+			ok = false;
+			break;
+		}
+		outF.println(tp);
+	}
+
+	outF.close();
+
+	if (!ok) {
+		SD.remove(tempPath);
+		server.send(400, "application/json", "{\"error\":\"invalid track list\"}");
+		return;
+	}
+
+	StorageResult res = replaceFileSafelyUnderGuard(tempPath, destPath);
 	heapLog("handleApiPlaylistTracksUpdate:after overwrite");
 	sendStorageResult(res);
 }
