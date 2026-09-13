@@ -205,16 +205,15 @@ inline StorageResult mapDisc(const String &rawUid, const String &rawType, const 
 		g_rfidActiveMapping.target = target;
 		g_rfidActiveMapping.label = label.length() > 0 ? label : target;
 
-		if (!g_rfidAudioPlaying) {
-			requestAudioStop();
-			if (type == "track") {
-				if (requestAudioPlay(target)) {
-					g_rfidAudioPlaying = true;
-				}
-			} else if (type == "playlist") {
-				if (requestAudioPlayPlaylist(target)) {
-					g_rfidAudioPlaying = true;
-				}
+		requestAudioStop();
+		g_rfidAudioPlaying = false;
+		if (type == "track") {
+			if (requestAudioPlay(target)) {
+				g_rfidAudioPlaying = true;
+			}
+		} else if (type == "playlist") {
+			if (requestAudioPlayPlaylist(target)) {
+				g_rfidAudioPlaying = true;
 			}
 		}
 	}

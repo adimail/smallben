@@ -146,7 +146,7 @@ inline bool isValidPlaylistName(const String &name) {
 
 inline bool isProtectedPath(const String &path) {
 	String p = normalizePath(path);
-	if (p == "/" || p == "/p") {
+	if (p == "/" || p == "/p" || p == "/smallben") {
 		return true;
 	}
 	String lower = p;

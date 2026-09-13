@@ -32,11 +32,10 @@ const size_t MAX_UPLOAD_SIZE = 31457280;
 const size_t MIN_SD_FREE_MARGIN = 2097152;
 const size_t MAX_JSON_BODY_SIZE = 16384;
 
-const char *const HIDDEN_EXACT_NAMES[] = {"playlists",	  "system volume information",
-										  "thumbs.db",	  ".ds_store",
-										  "discs.csv",	  "discs.tmp",
-										  "discs.new",	  "discs.bak",
-										  "discs.csv.bak"};
+const char *const HIDDEN_EXACT_NAMES[] = {
+	"p",		 "playlists", "smallben",	  "system volume information",
+	"thumbs.db", ".ds_store", "discs.csv",	  "discs.tmp",
+	"discs.new", "discs.bak", "discs.csv.bak"};
 const size_t NUM_HIDDEN_EXACT_NAMES = sizeof(HIDDEN_EXACT_NAMES) / sizeof(HIDDEN_EXACT_NAMES[0]);
 
 const char *const HIDDEN_EXTENSIONS[] = {".db",	 ".dat",	   ".idx", ".bin", ".sys",

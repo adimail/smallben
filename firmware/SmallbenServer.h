@@ -257,7 +257,10 @@ inline void streamMp3Entries(const String &dirPath, bool &first) {
 		size_t sz = entry.size();
 		entry.close();
 
-		if (isSystemOrHidden(name))
+		String lowerName = name;
+		lowerName.toLowerCase();
+		if (isSystemOrHidden(name) || lowerName == "smallben" || lowerName == "p" ||
+			lowerName == "playlists")
 			continue;
 
 		String fullPath = (dirPath == "/" ? "" : dirPath) + "/" + name;
@@ -319,7 +322,7 @@ inline void handleApiTrackPlaylists() {
 
 				String lower = name;
 				lower.toLowerCase();
-				if (!isDir && lower.endsWith(".m3u") && !isSystemOrHidden(name)) {
+				if (!isDir && lower.endsWith(".m3u") && !name.startsWith(".")) {
 					String fullPath = "/p/" + name;
 					File f = SD.open(fullPath, FILE_READ);
 					bool found = false;
@@ -662,7 +665,7 @@ inline void handleApiPlaylistsGet() {
 
 			String lower = name;
 			lower.toLowerCase();
-			if (!isDir && lower.endsWith(".m3u") && !isSystemOrHidden(name)) {
+			if (!isDir && lower.endsWith(".m3u") && !name.startsWith(".")) {
 				String fullPath = "/p/" + name;
 				int count = 0;
 				File f = SD.open(fullPath, FILE_READ);

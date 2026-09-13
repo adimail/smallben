@@ -75,7 +75,10 @@ const dTrackName = document.getElementById('dTrackName');
 const dTrackPath = document.getElementById('dTrackPath');
 const dTrackSize = document.getElementById('dTrackSize');
 const dTrackPlaylists = document.getElementById('dTrackPlaylists');
-const btnSidebarPlay = document.getElementById('btnSidebarPlay');
+const dHeroPlayState = document.getElementById('dHeroPlayState');
+const btnHeroPlay = document.getElementById('btnHeroPlay');
+const btnHeroIcon = document.getElementById('btnHeroIcon');
+const btnHeroText = document.getElementById('btnHeroText');
 const btnSidebarAddPlist = document.getElementById('btnSidebarAddPlist');
 const sidebarAddPlistBox = document.getElementById('sidebarAddPlistBox');
 const sidebarPlistSelect = document.getElementById('sidebarPlistSelect');
@@ -293,7 +296,23 @@ function toggleTrackPlay(path){
 function updateSidebarPlayButton(){
   if(!activeSelectedTrack) return;
   const isPlaying = (playingPath === activeSelectedTrack.path && playerState === 'playing');
-  btnSidebarPlay.textContent = isPlaying ? 'Pause Track' : 'Play Track';
+  const isPaused = (playingPath === activeSelectedTrack.path && playerState === 'paused');
+  if(isPlaying){
+    dHeroPlayState.textContent = 'NOW PLAYING';
+    dHeroPlayState.className = 'drawer-hero-state playing';
+    btnHeroIcon.textContent = '\u275A\u275A';
+    btnHeroText.textContent = 'Pause';
+  } else if(isPaused){
+    dHeroPlayState.textContent = 'PAUSED';
+    dHeroPlayState.className = 'drawer-hero-state paused';
+    btnHeroIcon.textContent = '\u25B6';
+    btnHeroText.textContent = 'Resume';
+  } else {
+    dHeroPlayState.textContent = 'READY';
+    dHeroPlayState.className = 'drawer-hero-state';
+    btnHeroIcon.textContent = '\u25B6';
+    btnHeroText.textContent = 'Play';
+  }
 }
 
 function renderTracks(){
@@ -371,7 +390,7 @@ function openTrackDrawer(t){
   btnSidebarDownload.setAttribute('download', t.name);
 
   updateSidebarPlayButton();
-  btnSidebarPlay.onclick = () => toggleTrackPlay(t.path);
+  btnHeroPlay.onclick = () => toggleTrackPlay(t.path);
 
   drawerOverlay.classList.add('open');
   trackDrawer.classList.add('open');
@@ -534,6 +553,26 @@ function openPlaylist(name){
     }).catch(()=>{ detailTrackList.innerHTML = '<div class="msg">Failed to load tracks.</div>'; });
 }
 
+function removeTrackFromCurrentPlaylist(index){
+  if(!currentPlaylist || index < 0 || index >= currentPlaylistTracks.length) return;
+  const newTracks = currentPlaylistTracks.filter((_, idx) => idx !== index).map(t => t.path);
+  fetch('/api/p/tracks?id=' + encodeURIComponent(currentPlaylist), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tracks: newTracks })
+  }).then(async r => {
+    const d = await r.json().catch(() => ({}));
+    if(!r.ok || d.status !== 'ok'){
+      showToast(d.error || 'Failed to remove track');
+    } else {
+      showToast('Track removed', 'success');
+      openPlaylist(currentPlaylist);
+    }
+  }).catch(e => {
+    showToast('Error removing track: ' + (e.message || 'connection failed'));
+  });
+}
+
 function renderPlaylistTracks(){
   plistDetailCount.textContent = currentPlaylistTracks.length + ' tracks';
   detailTrackList.innerHTML = '';
@@ -559,6 +598,7 @@ function renderPlaylistTracks(){
 
     const actions = document.createElement('div');
     actions.className = 'track-actions';
+
     const playBtn = document.createElement('button');
     playBtn.className = 'btn-icon';
     const isPlaying = (playingPath === t.path && playerState === 'playing');
@@ -567,7 +607,17 @@ function renderPlaylistTracks(){
       e.stopPropagation();
       toggleTrackPlay(t.path);
     };
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'btn-icon btn-del';
+    delBtn.textContent = '\u2715';
+    delBtn.onclick = (e) => {
+      e.stopPropagation();
+      removeTrackFromCurrentPlaylist(i);
+    };
+
     actions.appendChild(playBtn);
+    actions.appendChild(delBtn);
 
     row.appendChild(num);
     row.appendChild(main);
@@ -824,8 +874,8 @@ function renderDiscs(){
     const bLeft = document.createElement('div');
     bLeft.className = 'disc-main';
     const bSub = document.createElement('div');
-    bSub.className = 'disc-sub';
     bSub.textContent = 'ACTIVE UNMAPPED TAG';
+    bSub.className = 'disc-sub';
     const bVal = document.createElement('div');
     bVal.className = 'disc-title';
     bVal.textContent = activeTagUid;
@@ -850,6 +900,7 @@ function renderDiscs(){
   discs.forEach(d => {
     const row = document.createElement('div');
     row.className = 'disc-row' + (activeTagUid === d.uid ? ' present' : '');
+    row.onclick = () => openMapModal(d.uid, d.type, d.target, d.label || '');
 
     const main = document.createElement('div');
     main.className = 'disc-main';
@@ -877,15 +928,12 @@ function renderDiscs(){
 
     const actions = document.createElement('div');
     actions.className = 'track-actions';
-    const editBtn = document.createElement('button');
-    editBtn.className = 'btn-icon';
-    editBtn.textContent = 'Edit';
-    editBtn.onclick = () => openMapModal(d.uid, d.type, d.target, d.label || '');
 
     const delBtn = document.createElement('button');
     delBtn.className = 'btn-icon btn-del';
     delBtn.textContent = '\u2715';
-    delBtn.onclick = () => {
+    delBtn.onclick = (e) => {
+      e.stopPropagation();
       if(!confirm('Unmap disc ' + d.uid + '?')) return;
       fetch('/api/discs?uid=' + encodeURIComponent(d.uid), { method: 'DELETE' })
         .then(async r => {
@@ -901,9 +949,8 @@ function renderDiscs(){
           showToast('Error unmapping disc: ' + (err.message || 'request failed'));
         });
     };
-    actions.appendChild(editBtn);
-    actions.appendChild(delBtn);
 
+    actions.appendChild(delBtn);
     row.appendChild(main);
     row.appendChild(actions);
     discsList.appendChild(row);
