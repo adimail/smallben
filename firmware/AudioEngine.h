@@ -10,6 +10,7 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
+#include <vector>
 
 enum class AudioCmdType { Play, PlayPlaylist, Stop, Toggle, ReleaseI2S, ReclaimI2S, SetVolume };
 
@@ -19,10 +20,10 @@ struct AudioCommand {
 	float gain;
 };
 
-struct AudioStateSnapshot {
-	bool valid;
+struct AudioState {
 	bool isPlaying;
 	bool isPaused;
+	bool isStarting;
 	char path[128];
 };
 
@@ -30,21 +31,19 @@ static AudioGeneratorMP3 *audioMp3 = nullptr;
 static AudioFileSourceSD *audioFile = nullptr;
 static AudioOutputI2S *audioOut = nullptr;
 
-static bool audioIsPlaying = false;
-static bool audioIsPaused = false;
-static char audioCurrentPathBuf[128] = {0};
+static AudioState audioState = {false, false, false, {0}};
 static float currentAudioGain = 0.85f;
 
 static bool audioIsPlaylist = false;
 static char audioCurrentPlaylistName[64] = {0};
 static size_t audioCurrentPlaylistIndex = 0;
 static char audioCurrentTrack[128] = {0};
+static std::vector<String> audioPlaylistTracks;
 
 static SemaphoreHandle_t audioStateMutex = nullptr;
 static SemaphoreHandle_t audioSyncSem = nullptr;
 static QueueHandle_t audioCommandQueue = nullptr;
 static TaskHandle_t audioTaskHandle = nullptr;
-static volatile uint32_t audioTaskHeartbeat = 0;
 
 inline void ensureAudioStateMutex() {
 	if (!audioStateMutex) {
@@ -55,52 +54,40 @@ inline void ensureAudioStateMutex() {
 	}
 }
 
-inline bool isAudioTaskAlive() {
-	return (audioTaskHandle != nullptr && (millis() - audioTaskHeartbeat < 3000));
-}
+inline bool isAudioReady() { return (audioCommandQueue != nullptr && audioTaskHandle != nullptr); }
 
-inline AudioStateSnapshot getAudioSnapshot() {
+inline AudioState getAudioState() {
 	ensureAudioStateMutex();
-	AudioStateSnapshot snap;
-	snap.valid = false;
-	snap.isPlaying = false;
-	snap.isPaused = false;
-	snap.path[0] = '\0';
+	AudioState snap = {false, false, false, {0}};
 	if (audioStateMutex && xSemaphoreTake(audioStateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-		snap.valid = true;
-		snap.isPlaying = audioIsPlaying;
-		snap.isPaused = audioIsPaused;
-		strncpy(snap.path, audioCurrentPathBuf, sizeof(snap.path) - 1);
-		snap.path[sizeof(snap.path) - 1] = '\0';
+		snap = audioState;
 		xSemaphoreGive(audioStateMutex);
 	}
 	return snap;
 }
 
-inline void updateAudioState(bool playing, bool paused, const char *path) {
+inline void updateAudioState(bool playing, bool paused, bool starting, const char *path) {
 	ensureAudioStateMutex();
 	if (audioStateMutex && xSemaphoreTake(audioStateMutex, portMAX_DELAY) == pdTRUE) {
-		audioIsPlaying = playing;
-		audioIsPaused = paused;
+		audioState.isPlaying = playing;
+		audioState.isPaused = paused;
+		audioState.isStarting = starting;
 		if (path) {
-			strncpy(audioCurrentPathBuf, path, sizeof(audioCurrentPathBuf) - 1);
-			audioCurrentPathBuf[sizeof(audioCurrentPathBuf) - 1] = '\0';
+			strncpy(audioState.path, path, sizeof(audioState.path) - 1);
+			audioState.path[sizeof(audioState.path) - 1] = '\0';
 		} else {
-			audioCurrentPathBuf[0] = '\0';
+			audioState.path[0] = '\0';
 		}
 		xSemaphoreGive(audioStateMutex);
 	}
 }
 
 inline bool isAudioPathActive(const String &targetPath) {
-	AudioStateSnapshot snap = getAudioSnapshot();
-	if (!snap.valid) {
+	AudioState state = getAudioState();
+	if (!state.isPlaying && !state.isPaused && !state.isStarting) {
 		return false;
 	}
-	if (!snap.isPlaying && !snap.isPaused) {
-		return false;
-	}
-	String current(snap.path);
+	String current(state.path);
 	if (current.length() == 0) {
 		return false;
 	}
@@ -131,8 +118,7 @@ inline void stopPlaybackInternal() {
 	if (audioOut) {
 		audioOut->stop();
 	}
-	updateAudioState(false, false, "");
-	clearAudioPathReserved();
+	updateAudioState(false, false, false, "");
 }
 
 inline void stopAudioInternal() {
@@ -141,6 +127,7 @@ inline void stopAudioInternal() {
 	audioCurrentPlaylistName[0] = '\0';
 	audioCurrentPlaylistIndex = 0;
 	audioCurrentTrack[0] = '\0';
+	audioPlaylistTracks.clear();
 }
 
 inline void releaseAudioI2SInternal() {
@@ -173,7 +160,7 @@ inline bool startTrackInternal(const char *path) {
 		return false;
 	}
 	String p(path);
-	if (!isSafePath(p) || !isMp3(p)) {
+	if (!isValidPath(p) || !isMp3(p)) {
 		return false;
 	}
 
@@ -182,12 +169,12 @@ inline bool startTrackInternal(const char *path) {
 		return false;
 	}
 
-	setAudioPathReserved(path);
+	updateAudioState(false, false, true, path);
 
 	audioFile = new AudioFileSourceSD(path);
 	heapLog("startTrackInternal:after new AudioFileSourceSD");
 	if (!audioFile) {
-		clearAudioPathReserved();
+		updateAudioState(false, false, false, "");
 		return false;
 	}
 	audioMp3 = new AudioGeneratorMP3();
@@ -195,7 +182,7 @@ inline bool startTrackInternal(const char *path) {
 	if (!audioMp3) {
 		delete audioFile;
 		audioFile = nullptr;
-		clearAudioPathReserved();
+		updateAudioState(false, false, false, "");
 		return false;
 	}
 	if (!audioMp3->begin(audioFile, audioOut)) {
@@ -206,15 +193,14 @@ inline bool startTrackInternal(const char *path) {
 		audioFile->close();
 		delete audioFile;
 		audioFile = nullptr;
-		clearAudioPathReserved();
+		updateAudioState(false, false, false, "");
 		return false;
 	}
 	heapLog("startTrackInternal:after mp3 begin (playing)");
 
 	strncpy(audioCurrentTrack, path, sizeof(audioCurrentTrack) - 1);
 	audioCurrentTrack[sizeof(audioCurrentTrack) - 1] = '\0';
-	updateAudioState(true, false, path);
-	clearAudioPathReserved();
+	updateAudioState(true, false, false, path);
 	return true;
 }
 
@@ -225,11 +211,11 @@ inline bool startPlaylistInternal(const char *name) {
 		return false;
 	}
 	String pName(name);
-	if (!isSafePlaylistName(pName)) {
+	if (!isValidPlaylistName(pName)) {
 		return false;
 	}
-	size_t count = getPlaylistTrackCount(pName);
-	if (count == 0) {
+	audioPlaylistTracks.clear();
+	if (!loadPlaylistTracks(pName, audioPlaylistTracks) || audioPlaylistTracks.empty()) {
 		return false;
 	}
 	audioIsPlaylist = true;
@@ -237,14 +223,13 @@ inline bool startPlaylistInternal(const char *name) {
 	audioCurrentPlaylistName[sizeof(audioCurrentPlaylistName) - 1] = '\0';
 	audioCurrentPlaylistIndex = 0;
 
+	size_t count = audioPlaylistTracks.size();
 	size_t attempts = 0;
 	while (attempts < count) {
-		String trackPath;
-		if (getPlaylistTrackAt(pName, audioCurrentPlaylistIndex, trackPath)) {
-			if (startTrackInternal(trackPath.c_str())) {
-				heapLog("startPlaylistInternal:track started");
-				return true;
-			}
+		const String &trackPath = audioPlaylistTracks[audioCurrentPlaylistIndex];
+		if (startTrackInternal(trackPath.c_str())) {
+			heapLog("startPlaylistInternal:track started");
+			return true;
 		}
 		audioCurrentPlaylistIndex = (audioCurrentPlaylistIndex + 1) % count;
 		attempts++;
@@ -255,23 +240,16 @@ inline bool startPlaylistInternal(const char *name) {
 
 inline void onTrackFinishedInternal() {
 	heapLog("onTrackFinishedInternal:enter");
-	if (audioIsPlaylist && strlen(audioCurrentPlaylistName) > 0) {
-		size_t count = getPlaylistTrackCount(audioCurrentPlaylistName);
-		if (count == 0) {
-			stopAudioInternal();
-			return;
-		}
+	if (audioIsPlaylist && !audioPlaylistTracks.empty()) {
+		size_t count = audioPlaylistTracks.size();
 		audioCurrentPlaylistIndex = (audioCurrentPlaylistIndex + 1) % count;
 		size_t attempts = 0;
 		bool started = false;
 		while (attempts < count) {
-			String nextTrack;
-			if (getPlaylistTrackAt(audioCurrentPlaylistName, audioCurrentPlaylistIndex,
-								   nextTrack)) {
-				if (startTrackInternal(nextTrack.c_str())) {
-					started = true;
-					break;
-				}
+			const String &nextTrack = audioPlaylistTracks[audioCurrentPlaylistIndex];
+			if (startTrackInternal(nextTrack.c_str())) {
+				started = true;
+				break;
 			}
 			audioCurrentPlaylistIndex = (audioCurrentPlaylistIndex + 1) % count;
 			attempts++;
@@ -292,13 +270,10 @@ inline void togglePlayInternal(const char *path) {
 	if (!audioOut) {
 		return;
 	}
-	AudioStateSnapshot snap = getAudioSnapshot();
-	if (!snap.valid) {
-		return;
-	}
+	AudioState state = getAudioState();
 	if (path && strlen(path) > 0) {
-		if (snap.isPlaying && strcmp(snap.path, path) == 0) {
-			bool newPaused = !snap.isPaused;
+		if (state.isPlaying && strcmp(state.path, path) == 0) {
+			bool newPaused = !state.isPaused;
 			if (newPaused) {
 				audioOut->stop();
 			} else {
@@ -307,7 +282,7 @@ inline void togglePlayInternal(const char *path) {
 					return;
 				}
 			}
-			updateAudioState(true, newPaused, snap.path);
+			updateAudioState(true, newPaused, false, state.path);
 			return;
 		}
 		audioIsPlaylist = false;
@@ -316,8 +291,8 @@ inline void togglePlayInternal(const char *path) {
 		startTrackInternal(path);
 		return;
 	}
-	if (snap.isPlaying) {
-		bool newPaused = !snap.isPaused;
+	if (state.isPlaying) {
+		bool newPaused = !state.isPaused;
 		if (newPaused) {
 			audioOut->stop();
 		} else {
@@ -326,13 +301,13 @@ inline void togglePlayInternal(const char *path) {
 				return;
 			}
 		}
-		updateAudioState(true, newPaused, snap.path);
+		updateAudioState(true, newPaused, false, state.path);
 	}
 }
 
 inline void handleAudioInternal() {
-	AudioStateSnapshot snap = getAudioSnapshot();
-	if (snap.valid && audioMp3 && audioMp3->isRunning() && !snap.isPaused) {
+	AudioState state = getAudioState();
+	if (audioMp3 && audioMp3->isRunning() && !state.isPaused) {
 		bool ok = false;
 		{
 			SdGuard sdGuard;
@@ -346,11 +321,8 @@ inline void handleAudioInternal() {
 
 inline void audioTaskLoop(void *param) {
 	AudioCommand cmd;
-	audioTaskHeartbeat = millis();
 	for (;;) {
-		audioTaskHeartbeat = millis();
 		while (audioCommandQueue && xQueueReceive(audioCommandQueue, &cmd, 0) == pdTRUE) {
-			audioTaskHeartbeat = millis();
 			switch (cmd.type) {
 			case AudioCmdType::Play:
 				audioIsPlaylist = false;
@@ -396,90 +368,64 @@ inline void audioTaskLoop(void *param) {
 	}
 }
 
-inline bool requestAudioPlay(const String &path) {
-	if (!audioCommandQueue || !isAudioTaskAlive() || !isSafePath(path) || !isMp3(path))
+inline bool sendAudioCmd(AudioCmdType type, const char *path = nullptr, float gain = 0.0f,
+						 TickType_t timeout = pdMS_TO_TICKS(150)) {
+	if (!isAudioReady()) {
 		return false;
+	}
 	AudioCommand cmd;
-	cmd.type = AudioCmdType::Play;
-	cmd.gain = 0.0f;
-	strncpy(cmd.path, path.c_str(), sizeof(cmd.path) - 1);
-	cmd.path[sizeof(cmd.path) - 1] = '\0';
-	return (xQueueSend(audioCommandQueue, &cmd, pdMS_TO_TICKS(150)) == pdTRUE);
-}
-
-inline bool requestAudioPlayPlaylist(const String &name) {
-	if (!audioCommandQueue || !isAudioTaskAlive() || !isSafePlaylistName(name))
-		return false;
-	AudioCommand cmd;
-	cmd.type = AudioCmdType::PlayPlaylist;
-	cmd.gain = 0.0f;
-	strncpy(cmd.path, name.c_str(), sizeof(cmd.path) - 1);
-	cmd.path[sizeof(cmd.path) - 1] = '\0';
-	return (xQueueSend(audioCommandQueue, &cmd, pdMS_TO_TICKS(150)) == pdTRUE);
-}
-
-inline bool requestAudioStop() {
-	if (!audioCommandQueue || !isAudioTaskAlive())
-		return false;
-	AudioCommand cmd;
-	cmd.type = AudioCmdType::Stop;
-	cmd.path[0] = '\0';
-	cmd.gain = 0.0f;
-	return (xQueueSend(audioCommandQueue, &cmd, pdMS_TO_TICKS(150)) == pdTRUE);
-}
-
-inline bool requestAudioToggle(const String &path = "") {
-	if (!audioCommandQueue || !isAudioTaskAlive())
-		return false;
-	if (path.length() > 0 && (!isSafePath(path) || !isMp3(path)))
-		return false;
-	AudioCommand cmd;
-	cmd.type = AudioCmdType::Toggle;
-	cmd.gain = 0.0f;
-	if (path.length() > 0) {
-		strncpy(cmd.path, path.c_str(), sizeof(cmd.path) - 1);
+	cmd.type = type;
+	cmd.gain = gain;
+	if (path) {
+		strncpy(cmd.path, path, sizeof(cmd.path) - 1);
 		cmd.path[sizeof(cmd.path) - 1] = '\0';
 	} else {
 		cmd.path[0] = '\0';
 	}
-	return (xQueueSend(audioCommandQueue, &cmd, pdMS_TO_TICKS(150)) == pdTRUE);
+	return (xQueueSend(audioCommandQueue, &cmd, timeout) == pdTRUE);
+}
+
+inline bool requestAudioPlay(const String &path) {
+	if (!isValidPath(path) || !isMp3(path))
+		return false;
+	return sendAudioCmd(AudioCmdType::Play, path.c_str());
+}
+
+inline bool requestAudioPlayPlaylist(const String &name) {
+	if (!isValidPlaylistName(name))
+		return false;
+	return sendAudioCmd(AudioCmdType::PlayPlaylist, name.c_str());
+}
+
+inline bool requestAudioStop() { return sendAudioCmd(AudioCmdType::Stop); }
+
+inline bool requestAudioToggle(const String &path = "") {
+	if (path.length() > 0 && (!isValidPath(path) || !isMp3(path)))
+		return false;
+	return sendAudioCmd(AudioCmdType::Toggle, path.length() > 0 ? path.c_str() : nullptr);
 }
 
 inline bool requestAudioVolume(float gain) {
-	if (!audioCommandQueue || !isAudioTaskAlive())
-		return false;
-	AudioCommand cmd;
-	cmd.type = AudioCmdType::SetVolume;
-	cmd.path[0] = '\0';
-	cmd.gain = gain;
-	return (xQueueSend(audioCommandQueue, &cmd, pdMS_TO_TICKS(50)) == pdTRUE);
+	return sendAudioCmd(AudioCmdType::SetVolume, nullptr, gain, pdMS_TO_TICKS(50));
 }
 
 inline bool requestAudioReleaseI2SBlocking() {
-	if (!audioCommandQueue || !audioSyncSem || !isAudioTaskAlive()) {
+	if (!isAudioReady() || !audioSyncSem) {
 		return false;
 	}
 	xSemaphoreTake(audioSyncSem, 0);
-	AudioCommand cmd;
-	cmd.type = AudioCmdType::ReleaseI2S;
-	cmd.path[0] = '\0';
-	cmd.gain = 0.0f;
-	if (xQueueSend(audioCommandQueue, &cmd, pdMS_TO_TICKS(200)) != pdTRUE) {
+	if (!sendAudioCmd(AudioCmdType::ReleaseI2S, nullptr, 0.0f, pdMS_TO_TICKS(200))) {
 		return false;
 	}
 	return (xSemaphoreTake(audioSyncSem, pdMS_TO_TICKS(1500)) == pdTRUE);
 }
 
 inline bool requestAudioReclaimI2SBlocking() {
-	if (!audioCommandQueue || !audioSyncSem || !isAudioTaskAlive()) {
+	if (!isAudioReady() || !audioSyncSem) {
 		return false;
 	}
 	xSemaphoreTake(audioSyncSem, 0);
-	AudioCommand cmd;
-	cmd.type = AudioCmdType::ReclaimI2S;
-	cmd.path[0] = '\0';
-	cmd.gain = 0.0f;
-	if (xQueueSend(audioCommandQueue, &cmd, pdMS_TO_TICKS(200)) != pdTRUE) {
+	if (!sendAudioCmd(AudioCmdType::ReclaimI2S, nullptr, 0.0f, pdMS_TO_TICKS(200))) {
 		return false;
 	}
 	return (xSemaphoreTake(audioSyncSem, pdMS_TO_TICKS(1500)) == pdTRUE);
@@ -508,11 +454,7 @@ inline bool startAudioTask() {
 		BaseType_t res =
 			xTaskCreatePinnedToCore(audioTaskLoop, "audioTask", AUDIO_TASK_STACK_SIZE, nullptr,
 									AUDIO_TASK_PRIORITY, &audioTaskHandle, AUDIO_TASK_CORE);
-		if (res == pdPASS) {
-			audioTaskHeartbeat = millis();
-			return true;
-		}
-		return false;
+		return (res == pdPASS);
 	}
 	return true;
 }
