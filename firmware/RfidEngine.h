@@ -93,31 +93,6 @@ inline bool findDiscMappingOnSd(const String &searchUid, DiscMappingRecord &outR
 	return found;
 }
 
-template <typename Callback> inline void streamDiscMappingsFromSd(Callback cb) {
-	if (!isStorageReady()) {
-		return;
-	}
-	SdGuard guard;
-	if (!SD.exists("/discs.csv")) {
-		return;
-	}
-	File f = SD.open("/discs.csv", FILE_READ);
-	if (!f) {
-		return;
-	}
-	while (f.available()) {
-		String line = f.readStringUntil('\n');
-		line.trim();
-		if (line.length() == 0)
-			continue;
-		DiscMappingRecord rec;
-		if (parseMappingLine(line, rec)) {
-			cb(rec);
-		}
-	}
-	f.close();
-}
-
 inline StorageResult mapDisc(const String &rawUid, const String &rawType, const String &rawTarget,
 							 const String &rawLabel) {
 	heapLog("mapDisc:enter");
@@ -154,7 +129,7 @@ inline StorageResult mapDisc(const String &rawUid, const String &rawType, const 
 		if (!outF) {
 			if (inF)
 				inF.close();
-			return StorageResult::OpenFailed;
+			return StorageResult::Fail;
 		}
 
 		bool overwritten = false;
@@ -194,7 +169,7 @@ inline StorageResult mapDisc(const String &rawUid, const String &rawType, const 
 		}
 		outF.close();
 
-		StorageResult res = replaceFileSafelyUnderGuard(tempPath, destPath);
+		StorageResult res = replaceFileSafelyUnderLock(tempPath, destPath);
 		if (res != StorageResult::Ok) {
 			return res;
 		}
@@ -242,7 +217,7 @@ inline StorageResult unmapDisc(const String &rawUid) {
 		File outF = SD.open(tempPath, FILE_WRITE);
 		if (!outF) {
 			inF.close();
-			return StorageResult::OpenFailed;
+			return StorageResult::Fail;
 		}
 
 		while (inF.available()) {
@@ -267,7 +242,7 @@ inline StorageResult unmapDisc(const String &rawUid) {
 			return StorageResult::NotFound;
 		}
 
-		StorageResult res = replaceFileSafelyUnderGuard(tempPath, destPath);
+		StorageResult res = replaceFileSafelyUnderLock(tempPath, destPath);
 		if (res != StorageResult::Ok) {
 			return res;
 		}
@@ -336,7 +311,7 @@ inline bool cascadeRenamePlaylist(const String &oldName, const String &newName) 
 			return true;
 		}
 
-		return (replaceFileSafelyUnderGuard(tempPath, destPath) == StorageResult::Ok);
+		return (replaceFileSafelyUnderLock(tempPath, destPath) == StorageResult::Ok);
 	}
 }
 
@@ -382,7 +357,7 @@ inline bool cascadeDeletePlaylist(const String &name) {
 			return true;
 		}
 
-		return (replaceFileSafelyUnderGuard(tempPath, destPath) == StorageResult::Ok);
+		return (replaceFileSafelyUnderLock(tempPath, destPath) == StorageResult::Ok);
 	}
 }
 

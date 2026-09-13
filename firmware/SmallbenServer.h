@@ -42,9 +42,6 @@ inline void sendStorageResult(StorageResult res, const String &successMsg = "{\"
 	case StorageResult::NoSpace:
 		server.send(507, "application/json", "{\"error\":\"storage full\"}");
 		break;
-	case StorageResult::DirectoryNotEmpty:
-		server.send(409, "application/json", "{\"error\":\"directory not empty\"}");
-		break;
 	case StorageResult::StorageUnavailable:
 		server.send(503, "application/json", "{\"error\":\"SD card unavailable\"}");
 		break;
@@ -193,14 +190,44 @@ inline void handleApiDiscsGet() {
 	server.send(200, "application/json", "");
 	server.sendContent("[");
 	bool first = true;
-	streamDiscMappingsFromSd([&](const DiscMappingRecord &item) {
-		if (!first)
-			server.sendContent(",");
-		first = false;
-		server.sendContent("{\"uid\":\"" + jsonEscape(item.uid) + "\",\"type\":\"" +
-						   jsonEscape(item.type) + "\",\"target\":\"" + jsonEscape(item.target) +
-						   "\",\"label\":\"" + jsonEscape(item.label) + "\"}");
-	});
+	File f;
+	{
+		SdGuard guard;
+		if (isStorageReady() && SD.exists("/discs.csv")) {
+			f = SD.open("/discs.csv", FILE_READ);
+		}
+	}
+	if (f) {
+		while (true) {
+			DiscMappingRecord rec;
+			bool haveRec = false;
+			{
+				SdGuard guard;
+				while (f.available()) {
+					String line = f.readStringUntil('\n');
+					line.trim();
+					if (line.length() == 0)
+						continue;
+					if (parseMappingLine(line, rec)) {
+						haveRec = true;
+						break;
+					}
+				}
+			}
+			if (!haveRec)
+				break;
+			if (!first)
+				server.sendContent(",");
+			first = false;
+			server.sendContent("{\"uid\":\"" + jsonEscape(rec.uid) + "\",\"type\":\"" +
+							   jsonEscape(rec.type) + "\",\"target\":\"" + jsonEscape(rec.target) +
+							   "\",\"label\":\"" + jsonEscape(rec.label) + "\"}");
+		}
+		{
+			SdGuard guard;
+			f.close();
+		}
+	}
 	server.sendContent("]");
 	server.sendContent("");
 }
@@ -240,22 +267,35 @@ inline void handleApiDiscsDelete() {
 }
 
 inline void streamMp3Entries(const String &dirPath, bool &first) {
-	SdGuard guard;
-	File dir = SD.open(dirPath);
-	if (!dir || !dir.isDirectory()) {
-		if (dir)
-			dir.close();
-		return;
+	File dir;
+	{
+		SdGuard guard;
+		dir = SD.open(dirPath);
+		if (!dir || !dir.isDirectory()) {
+			if (dir)
+				dir.close();
+			return;
+		}
 	}
 
 	while (true) {
-		File entry = dir.openNextFile();
-		if (!entry)
+		String name = "";
+		bool isDir = false;
+		size_t sz = 0;
+		bool hasEntry = false;
+		{
+			SdGuard guard;
+			File entry = dir.openNextFile();
+			if (entry) {
+				name = entry.name();
+				isDir = entry.isDirectory();
+				sz = entry.size();
+				entry.close();
+				hasEntry = true;
+			}
+		}
+		if (!hasEntry)
 			break;
-		String name = entry.name();
-		bool isDir = entry.isDirectory();
-		size_t sz = entry.size();
-		entry.close();
 
 		String lowerName = name;
 		lowerName.toLowerCase();
@@ -274,7 +314,10 @@ inline void streamMp3Entries(const String &dirPath, bool &first) {
 							   jsonEscape(fullPath) + "\",\"size\":" + String(sz) + "}");
 		}
 	}
-	dir.close();
+	{
+		SdGuard guard;
+		dir.close();
+	}
 }
 
 inline void handleApiMp3() {
@@ -309,47 +352,61 @@ inline void handleApiTrackPlaylists() {
 	bool first = true;
 
 	if (isStorageReady()) {
-		SdGuard guard;
-		File dir = SD.open("/p");
+		File dir;
+		{
+			SdGuard guard;
+			dir = SD.open("/p");
+		}
 		if (dir && dir.isDirectory()) {
 			while (true) {
-				File entry = dir.openNextFile();
-				if (!entry)
-					break;
-				String name = entry.name();
-				bool isDir = entry.isDirectory();
-				entry.close();
+				String matchedPlaylist = "";
+				bool hasMatch = false;
+				{
+					SdGuard guard;
+					while (true) {
+						File entry = dir.openNextFile();
+						if (!entry)
+							break;
+						String name = entry.name();
+						bool isDir = entry.isDirectory();
+						entry.close();
 
-				String lower = name;
-				lower.toLowerCase();
-				if (!isDir && lower.endsWith(".m3u") && !name.startsWith(".")) {
-					String fullPath = "/p/" + name;
-					File f = SD.open(fullPath, FILE_READ);
-					bool found = false;
-					if (f) {
-						while (f.available()) {
-							String line = f.readStringUntil('\n');
-							line.trim();
-							if (line == path) {
-								found = true;
+						String lower = name;
+						lower.toLowerCase();
+						if (!isDir && lower.endsWith(".m3u") && !name.startsWith(".")) {
+							String fullPath = "/p/" + name;
+							File f = SD.open(fullPath, FILE_READ);
+							bool found = false;
+							if (f) {
+								while (f.available()) {
+									String line = f.readStringUntil('\n');
+									line.trim();
+									if (line == path) {
+										found = true;
+										break;
+									}
+								}
+								f.close();
+							}
+							if (found) {
+								matchedPlaylist = name.substring(0, name.length() - 4);
+								hasMatch = true;
 								break;
 							}
 						}
-						f.close();
-					}
-					if (found) {
-						String base = name;
-						if (base.endsWith(".m3u")) {
-							base = base.substring(0, base.length() - 4);
-						}
-						if (!first)
-							server.sendContent(",");
-						first = false;
-						server.sendContent("\"" + jsonEscape(base) + "\"");
 					}
 				}
+				if (!hasMatch)
+					break;
+				if (!first)
+					server.sendContent(",");
+				first = false;
+				server.sendContent("\"" + jsonEscape(matchedPlaylist) + "\"");
 			}
-			dir.close();
+			{
+				SdGuard guard;
+				dir.close();
+			}
 		}
 	}
 
@@ -366,13 +423,16 @@ inline void handleApiTree() {
 		return;
 	}
 
-	SdGuard guard;
-	File dir = SD.open(normalizePath(path));
-	if (!dir || !dir.isDirectory()) {
-		if (dir)
-			dir.close();
-		server.send(404, "application/json", "[]");
-		return;
+	File dir;
+	{
+		SdGuard guard;
+		dir = SD.open(normalizePath(path));
+		if (!dir || !dir.isDirectory()) {
+			if (dir)
+				dir.close();
+			server.send(404, "application/json", "[]");
+			return;
+		}
 	}
 
 	server.setContentLength(CONTENT_LENGTH_UNKNOWN);
@@ -380,7 +440,32 @@ inline void handleApiTree() {
 	server.sendContent("[");
 	bool first = true;
 
-	iterateDirectory(dir, [&](const String &name, bool isDir, size_t sz) {
+	while (true) {
+		String name = "";
+		bool isDir = false;
+		size_t sz = 0;
+		bool hasEntry = false;
+		{
+			SdGuard guard;
+			while (true) {
+				File entry = dir.openNextFile();
+				if (!entry)
+					break;
+				String ename = entry.name();
+				bool edir = entry.isDirectory();
+				size_t esz = entry.size();
+				entry.close();
+				if (isSystemOrHidden(ename))
+					continue;
+				name = ename;
+				isDir = edir;
+				sz = esz;
+				hasEntry = true;
+				break;
+			}
+		}
+		if (!hasEntry)
+			break;
 		if (!first)
 			server.sendContent(",");
 		first = false;
@@ -390,9 +475,12 @@ inline void handleApiTree() {
 			server.sendContent("{\"name\":\"" + jsonEscape(name) +
 							   "\",\"type\":\"file\",\"size\":" + String(sz) + "}");
 		}
-	});
+	}
 
-	dir.close();
+	{
+		SdGuard guard;
+		dir.close();
+	}
 	server.sendContent("]");
 	server.sendContent("");
 }
@@ -652,42 +740,61 @@ inline void handleApiPlaylistsGet() {
 	server.sendContent("[");
 	bool first = true;
 
-	SdGuard guard;
-	File dir = SD.open("/p");
+	File dir;
+	{
+		SdGuard guard;
+		dir = SD.open("/p");
+	}
 	if (dir && dir.isDirectory()) {
 		while (true) {
-			File entry = dir.openNextFile();
-			if (!entry)
-				break;
-			String name = entry.name();
-			bool isDir = entry.isDirectory();
-			entry.close();
+			String baseName = "";
+			int trackCount = 0;
+			bool hasPlaylist = false;
+			{
+				SdGuard guard;
+				while (true) {
+					File entry = dir.openNextFile();
+					if (!entry)
+						break;
+					String name = entry.name();
+					bool isDir = entry.isDirectory();
+					entry.close();
 
-			String lower = name;
-			lower.toLowerCase();
-			if (!isDir && lower.endsWith(".m3u") && !name.startsWith(".")) {
-				String fullPath = "/p/" + name;
-				int count = 0;
-				File f = SD.open(fullPath, FILE_READ);
-				if (f) {
-					while (f.available()) {
-						String line = f.readStringUntil('\n');
-						line.trim();
-						if (line.length() > 0 && !line.startsWith("#")) {
-							count++;
+					String lower = name;
+					lower.toLowerCase();
+					if (!isDir && lower.endsWith(".m3u") && !name.startsWith(".")) {
+						String fullPath = "/p/" + name;
+						int count = 0;
+						File f = SD.open(fullPath, FILE_READ);
+						if (f) {
+							while (f.available()) {
+								String line = f.readStringUntil('\n');
+								line.trim();
+								if (line.length() > 0 && !line.startsWith("#")) {
+									count++;
+								}
+							}
+							f.close();
 						}
+						baseName = name.substring(0, name.length() - 4);
+						trackCount = count;
+						hasPlaylist = true;
+						break;
 					}
-					f.close();
 				}
-				String baseName = name.substring(0, name.length() - 4);
-				if (!first)
-					server.sendContent(",");
-				first = false;
-				server.sendContent("{\"name\":\"" + jsonEscape(baseName) +
-								   "\",\"trackCount\":" + String(count) + "}");
 			}
+			if (!hasPlaylist)
+				break;
+			if (!first)
+				server.sendContent(",");
+			first = false;
+			server.sendContent("{\"name\":\"" + jsonEscape(baseName) +
+							   "\",\"trackCount\":" + String(trackCount) + "}");
 		}
-		dir.close();
+		{
+			SdGuard guard;
+			dir.close();
+		}
 	}
 
 	server.sendContent("]");
@@ -719,24 +826,72 @@ inline void handleApiPlaylistTracksGet() {
 		server.send(400, "application/json", "{\"error\":\"invalid id\"}");
 		return;
 	}
+
+	String path = getPlaylistPath(id);
+	File f;
+	{
+		SdGuard guard;
+		if (!isStorageReady() || !SD.exists(path)) {
+			server.send(404, "application/json", "{\"error\":\"not found\"}");
+			return;
+		}
+		f = SD.open(path, FILE_READ);
+		if (!f) {
+			server.send(404, "application/json", "{\"error\":\"not found\"}");
+			return;
+		}
+	}
+
 	server.setContentLength(CONTENT_LENGTH_UNKNOWN);
 	server.send(200, "application/json", "");
 	server.sendContent("[");
 	bool first = true;
-	bool ok = iteratePlaylistTracks(
-		id, [&](const String &name, const String &path, size_t sz, bool exists) {
-			if (!first)
-				server.sendContent(",");
-			first = false;
-			server.sendContent("{\"name\":\"" + jsonEscape(name) + "\",\"path\":\"" +
-							   jsonEscape(path) + "\",\"size\":" + String(sz) +
-							   ",\"exists\":" + (exists ? "true" : "false") + "}");
-		});
+
+	while (true) {
+		String trackName = "";
+		String trackPath = "";
+		size_t sz = 0;
+		bool exists = false;
+		bool hasTrack = false;
+		{
+			SdGuard guard;
+			while (f.available()) {
+				String line = f.readStringUntil('\n');
+				line.trim();
+				if (line.length() > 0 && !line.startsWith("#")) {
+					trackPath = line;
+					int lastSlash = trackPath.lastIndexOf('/');
+					trackName = (lastSlash != -1) ? trackPath.substring(lastSlash + 1) : trackPath;
+					if (SD.exists(trackPath)) {
+						File tf = SD.open(trackPath, FILE_READ);
+						if (tf) {
+							sz = tf.size();
+							exists = true;
+							tf.close();
+						}
+					}
+					hasTrack = true;
+					break;
+				}
+			}
+		}
+		if (!hasTrack)
+			break;
+		if (!first)
+			server.sendContent(",");
+		first = false;
+		server.sendContent("{\"name\":\"" + jsonEscape(trackName) + "\",\"path\":\"" +
+						   jsonEscape(trackPath) + "\",\"size\":" + String(sz) +
+						   ",\"exists\":" + (exists ? "true" : "false") + "}");
+	}
+
+	{
+		SdGuard guard;
+		f.close();
+	}
+
 	server.sendContent("]");
 	server.sendContent("");
-	if (!ok) {
-		server.send(404, "application/json", "{\"error\":\"not found\"}");
-	}
 }
 
 inline void handleApiPlaylistTracksUpdate() {
@@ -830,7 +985,7 @@ inline void handleApiPlaylistTracksUpdate() {
 		return;
 	}
 
-	StorageResult res = replaceFileSafelyUnderGuard(tempPath, destPath);
+	StorageResult res = replaceFileSafelyUnderLock(tempPath, destPath);
 	heapLog("handleApiPlaylistTracksUpdate:after overwrite");
 	sendStorageResult(res);
 }

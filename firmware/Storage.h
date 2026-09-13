@@ -14,28 +14,19 @@ enum class StorageResult {
 	Protected,
 	Active,
 	NoSpace,
-	OpenFailed,
-	WriteFailed,
-	VerifyFailed,
-	RenameFailed,
-	DeleteFailed,
-	DirectoryNotEmpty,
-	StorageUnavailable
+	StorageUnavailable,
+	Fail
 };
 
 static SPIClass sdSPI(HSPI);
 static SemaphoreHandle_t sdMutex = nullptr;
 static bool g_sdReady = false;
 
-static uint64_t g_cachedTotalBytes = 0;
-static uint64_t g_cachedUsedBytes = 0;
-static unsigned long g_lastSdStatsUpdate = 0;
-
 static bool (*g_isAudioPathActiveCheck)(const String &path) = nullptr;
 
 inline void ensureSdMutex() {
 	if (!sdMutex) {
-		sdMutex = xSemaphoreCreateRecursiveMutex();
+		sdMutex = xSemaphoreCreateMutex();
 	}
 }
 
@@ -44,12 +35,12 @@ class SdGuard {
 	SdGuard() {
 		ensureSdMutex();
 		if (sdMutex) {
-			xSemaphoreTakeRecursive(sdMutex, portMAX_DELAY);
+			xSemaphoreTake(sdMutex, portMAX_DELAY);
 		}
 	}
 	~SdGuard() {
 		if (sdMutex) {
-			xSemaphoreGiveRecursive(sdMutex);
+			xSemaphoreGive(sdMutex);
 		}
 	}
 	SdGuard(const SdGuard &) = delete;
@@ -230,42 +221,27 @@ inline String urldecode(const String &src) {
 	return decoded;
 }
 
-inline void refreshSdStatsDirect() {
-	if (!g_sdReady) {
-		g_cachedTotalBytes = 0;
-		g_cachedUsedBytes = 0;
-		return;
-	}
-	SdGuard guard;
-	g_cachedTotalBytes = SD.totalBytes();
-	g_cachedUsedBytes = SD.usedBytes();
-	g_lastSdStatsUpdate = millis();
-}
-
-inline void refreshSdStatsIfNeeded() {
-	if (!g_sdReady)
-		return;
-	if (millis() - g_lastSdStatsUpdate > 45000 || g_cachedTotalBytes == 0) {
-		refreshSdStatsDirect();
-	}
-}
-
 inline uint64_t getSdTotalBytes() {
-	refreshSdStatsIfNeeded();
-	return g_cachedTotalBytes;
+	if (!g_sdReady)
+		return 0;
+	SdGuard guard;
+	return SD.totalBytes();
 }
 
 inline uint64_t getSdUsedBytes() {
-	refreshSdStatsIfNeeded();
-	return g_cachedUsedBytes;
+	if (!g_sdReady)
+		return 0;
+	SdGuard guard;
+	return SD.usedBytes();
 }
 
 inline uint64_t getSdFreeBytes() {
-	refreshSdStatsIfNeeded();
-	if (g_cachedTotalBytes > g_cachedUsedBytes) {
-		return g_cachedTotalBytes - g_cachedUsedBytes;
-	}
-	return 0;
+	if (!g_sdReady)
+		return 0;
+	SdGuard guard;
+	uint64_t total = SD.totalBytes();
+	uint64_t used = SD.usedBytes();
+	return (total > used) ? (total - used) : 0;
 }
 
 inline void cleanupTempFiles(File dir, const String &parentPath) {
@@ -345,7 +321,26 @@ inline StorageResult createDirectory(const String &path) {
 		return StorageResult::AlreadyExists;
 	}
 	if (!SD.mkdir(p)) {
-		return StorageResult::WriteFailed;
+		return StorageResult::Fail;
+	}
+	return StorageResult::Ok;
+}
+
+inline StorageResult deleteFileUnderLock(const String &path) {
+	if (!SD.exists(path)) {
+		return StorageResult::NotFound;
+	}
+	File f = SD.open(path, FILE_READ);
+	if (!f) {
+		return StorageResult::NotFound;
+	}
+	if (f.isDirectory()) {
+		f.close();
+		return StorageResult::Fail;
+	}
+	f.close();
+	if (!SD.remove(path)) {
+		return StorageResult::Fail;
 	}
 	return StorageResult::Ok;
 }
@@ -362,20 +357,28 @@ inline StorageResult deleteFile(const String &path) {
 		return StorageResult::Active;
 
 	SdGuard guard;
-	if (!SD.exists(p)) {
+	return deleteFileUnderLock(p);
+}
+
+inline StorageResult deleteEmptyDirectoryUnderLock(const String &path) {
+	if (!SD.exists(path)) {
 		return StorageResult::NotFound;
 	}
-	File f = SD.open(p, FILE_READ);
-	if (!f) {
+	File dir = SD.open(path);
+	if (!dir || !dir.isDirectory()) {
+		if (dir)
+			dir.close();
 		return StorageResult::NotFound;
 	}
-	if (f.isDirectory()) {
-		f.close();
-		return StorageResult::DeleteFailed;
+	File entry = dir.openNextFile();
+	if (entry) {
+		entry.close();
+		dir.close();
+		return StorageResult::Fail;
 	}
-	f.close();
-	if (!SD.remove(p)) {
-		return StorageResult::DeleteFailed;
+	dir.close();
+	if (!SD.rmdir(path)) {
+		return StorageResult::Fail;
 	}
 	return StorageResult::Ok;
 }
@@ -392,26 +395,7 @@ inline StorageResult deleteEmptyDirectory(const String &path) {
 		return StorageResult::Active;
 
 	SdGuard guard;
-	if (!SD.exists(p)) {
-		return StorageResult::NotFound;
-	}
-	File dir = SD.open(p);
-	if (!dir || !dir.isDirectory()) {
-		if (dir)
-			dir.close();
-		return StorageResult::NotFound;
-	}
-	File entry = dir.openNextFile();
-	if (entry) {
-		entry.close();
-		dir.close();
-		return StorageResult::DirectoryNotEmpty;
-	}
-	dir.close();
-	if (!SD.rmdir(p)) {
-		return StorageResult::DeleteFailed;
-	}
-	return StorageResult::Ok;
+	return deleteEmptyDirectoryUnderLock(p);
 }
 
 inline StorageResult deleteStoragePath(const String &path) {
@@ -437,9 +421,9 @@ inline StorageResult deleteStoragePath(const String &path) {
 	target.close();
 
 	if (isDir) {
-		return deleteEmptyDirectory(p);
+		return deleteEmptyDirectoryUnderLock(p);
 	}
-	return deleteFile(p);
+	return deleteFileUnderLock(p);
 }
 
 inline StorageResult renameStoragePath(const String &oldPath, const String &newPath) {
@@ -462,15 +446,15 @@ inline StorageResult renameStoragePath(const String &oldPath, const String &newP
 		return StorageResult::AlreadyExists;
 	}
 	if (!SD.rename(src, dst)) {
-		return StorageResult::RenameFailed;
+		return StorageResult::Fail;
 	}
 	if (!SD.exists(dst)) {
-		return StorageResult::VerifyFailed;
+		return StorageResult::Fail;
 	}
 	return StorageResult::Ok;
 }
 
-inline StorageResult replaceFileSafelyUnderGuard(const String &tempPath, const String &destPath) {
+inline StorageResult replaceFileSafelyUnderLock(const String &tempPath, const String &destPath) {
 	String bakPath = destPath + ".bak";
 	bool hadDest = SD.exists(destPath);
 
@@ -480,7 +464,7 @@ inline StorageResult replaceFileSafelyUnderGuard(const String &tempPath, const S
 		}
 		if (!SD.rename(destPath, bakPath)) {
 			SD.remove(tempPath);
-			return StorageResult::RenameFailed;
+			return StorageResult::Fail;
 		}
 	}
 
@@ -489,7 +473,7 @@ inline StorageResult replaceFileSafelyUnderGuard(const String &tempPath, const S
 			SD.rename(bakPath, destPath);
 		}
 		SD.remove(tempPath);
-		return StorageResult::RenameFailed;
+		return StorageResult::Fail;
 	}
 
 	if (hadDest && SD.exists(bakPath)) {
@@ -497,7 +481,7 @@ inline StorageResult replaceFileSafelyUnderGuard(const String &tempPath, const S
 	}
 
 	if (!SD.exists(destPath)) {
-		return StorageResult::VerifyFailed;
+		return StorageResult::Fail;
 	}
 	return StorageResult::Ok;
 }
@@ -522,16 +506,16 @@ inline StorageResult commitUploadFile(const String &tempPath, const String &dest
 	File tf = SD.open(tmp, FILE_READ);
 	if (!tf) {
 		SD.remove(tmp);
-		return StorageResult::VerifyFailed;
+		return StorageResult::Fail;
 	}
 	size_t actualSize = tf.size();
 	tf.close();
 	if (actualSize != expectedSize) {
 		SD.remove(tmp);
-		return StorageResult::VerifyFailed;
+		return StorageResult::Fail;
 	}
 
-	return replaceFileSafelyUnderGuard(tmp, dst);
+	return replaceFileSafelyUnderLock(tmp, dst);
 }
 
 inline StorageResult createPlaylist(const String &name) {
@@ -544,7 +528,7 @@ inline StorageResult createPlaylist(const String &name) {
 	SdGuard guard;
 	if (!SD.exists("/p")) {
 		if (!SD.mkdir("/p")) {
-			return StorageResult::WriteFailed;
+			return StorageResult::Fail;
 		}
 	}
 	if (SD.exists(path)) {
@@ -575,11 +559,11 @@ inline StorageResult createPlaylist(const String &name) {
 
 	File f = SD.open(path, FILE_WRITE);
 	if (!f) {
-		return StorageResult::OpenFailed;
+		return StorageResult::Fail;
 	}
 	f.close();
 	if (!SD.exists(path)) {
-		return StorageResult::VerifyFailed;
+		return StorageResult::Fail;
 	}
 	return StorageResult::Ok;
 }
@@ -595,8 +579,7 @@ inline StorageResult deletePlaylist(const String &name) {
 	if (!isValidPlaylistName(name)) {
 		return StorageResult::InvalidPath;
 	}
-	String path = getPlaylistPath(name);
-	return deleteFile(path);
+	return deleteFile(getPlaylistPath(name));
 }
 
 inline size_t getPlaylistTrackCount(const String &name) {
@@ -667,7 +650,7 @@ inline StorageResult appendPlaylistTrack(const String &name, const String &track
 
 	File f = SD.open(path, FILE_READ);
 	if (!f) {
-		return StorageResult::OpenFailed;
+		return StorageResult::Fail;
 	}
 	size_t count = 0;
 	while (f.available()) {
@@ -685,58 +668,12 @@ inline StorageResult appendPlaylistTrack(const String &name, const String &track
 
 	File af = SD.open(path, FILE_APPEND);
 	if (!af) {
-		return StorageResult::OpenFailed;
+		return StorageResult::Fail;
 	}
 	size_t written = af.println(tp);
 	af.close();
 	if (written == 0) {
-		return StorageResult::WriteFailed;
+		return StorageResult::Fail;
 	}
 	return StorageResult::Ok;
-}
-
-template <typename Callback> inline void iterateDirectory(File dir, Callback cb) {
-	while (true) {
-		File entry = dir.openNextFile();
-		if (!entry)
-			break;
-		String name = entry.name();
-		if (isSystemOrHidden(name)) {
-			entry.close();
-			continue;
-		}
-		cb(name, entry.isDirectory(), entry.size());
-		entry.close();
-	}
-}
-
-template <typename Callback> inline bool iteratePlaylistTracks(const String &name, Callback cb) {
-	if (!g_sdReady || !isValidPlaylistName(name))
-		return false;
-	String path = getPlaylistPath(name);
-	SdGuard guard;
-	File f = SD.open(path, FILE_READ);
-	if (!f)
-		return false;
-	while (f.available()) {
-		String trackPath = f.readStringUntil('\n');
-		trackPath.trim();
-		if (trackPath.length() > 0 && !trackPath.startsWith("#")) {
-			int lastSlash = trackPath.lastIndexOf('/');
-			String trackName = (lastSlash != -1) ? trackPath.substring(lastSlash + 1) : trackPath;
-			size_t sz = 0;
-			bool exists = false;
-			if (SD.exists(trackPath)) {
-				File tf = SD.open(trackPath, FILE_READ);
-				if (tf) {
-					sz = tf.size();
-					exists = true;
-					tf.close();
-				}
-			}
-			cb(trackName, trackPath, sz, exists);
-		}
-	}
-	f.close();
-	return true;
 }
