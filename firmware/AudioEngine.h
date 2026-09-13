@@ -44,7 +44,6 @@ static SemaphoreHandle_t audioStateMutex = nullptr;
 static SemaphoreHandle_t audioSyncSem = nullptr;
 static QueueHandle_t audioCommandQueue = nullptr;
 static TaskHandle_t audioTaskHandle = nullptr;
-static volatile uint32_t audioTaskHeartbeat = 0;
 
 inline void ensureAudioStateMutex() {
 	if (!audioStateMutex) {
@@ -55,9 +54,7 @@ inline void ensureAudioStateMutex() {
 	}
 }
 
-inline bool isAudioTaskAlive() {
-	return (audioTaskHandle != nullptr && (millis() - audioTaskHeartbeat < 3000));
-}
+inline bool isAudioReady() { return (audioCommandQueue != nullptr && audioTaskHandle != nullptr); }
 
 inline AudioStateSnapshot getAudioSnapshot() {
 	ensureAudioStateMutex();
@@ -346,11 +343,8 @@ inline void handleAudioInternal() {
 
 inline void audioTaskLoop(void *param) {
 	AudioCommand cmd;
-	audioTaskHeartbeat = millis();
 	for (;;) {
-		audioTaskHeartbeat = millis();
 		while (audioCommandQueue && xQueueReceive(audioCommandQueue, &cmd, 0) == pdTRUE) {
-			audioTaskHeartbeat = millis();
 			switch (cmd.type) {
 			case AudioCmdType::Play:
 				audioIsPlaylist = false;
@@ -396,90 +390,64 @@ inline void audioTaskLoop(void *param) {
 	}
 }
 
-inline bool requestAudioPlay(const String &path) {
-	if (!audioCommandQueue || !isAudioTaskAlive() || !isSafePath(path) || !isMp3(path))
+inline bool sendAudioCmd(AudioCmdType type, const char *path = nullptr, float gain = 0.0f,
+						 TickType_t timeout = pdMS_TO_TICKS(150)) {
+	if (!isAudioReady()) {
 		return false;
+	}
 	AudioCommand cmd;
-	cmd.type = AudioCmdType::Play;
-	cmd.gain = 0.0f;
-	strncpy(cmd.path, path.c_str(), sizeof(cmd.path) - 1);
-	cmd.path[sizeof(cmd.path) - 1] = '\0';
-	return (xQueueSend(audioCommandQueue, &cmd, pdMS_TO_TICKS(150)) == pdTRUE);
-}
-
-inline bool requestAudioPlayPlaylist(const String &name) {
-	if (!audioCommandQueue || !isAudioTaskAlive() || !isSafePlaylistName(name))
-		return false;
-	AudioCommand cmd;
-	cmd.type = AudioCmdType::PlayPlaylist;
-	cmd.gain = 0.0f;
-	strncpy(cmd.path, name.c_str(), sizeof(cmd.path) - 1);
-	cmd.path[sizeof(cmd.path) - 1] = '\0';
-	return (xQueueSend(audioCommandQueue, &cmd, pdMS_TO_TICKS(150)) == pdTRUE);
-}
-
-inline bool requestAudioStop() {
-	if (!audioCommandQueue || !isAudioTaskAlive())
-		return false;
-	AudioCommand cmd;
-	cmd.type = AudioCmdType::Stop;
-	cmd.path[0] = '\0';
-	cmd.gain = 0.0f;
-	return (xQueueSend(audioCommandQueue, &cmd, pdMS_TO_TICKS(150)) == pdTRUE);
-}
-
-inline bool requestAudioToggle(const String &path = "") {
-	if (!audioCommandQueue || !isAudioTaskAlive())
-		return false;
-	if (path.length() > 0 && (!isSafePath(path) || !isMp3(path)))
-		return false;
-	AudioCommand cmd;
-	cmd.type = AudioCmdType::Toggle;
-	cmd.gain = 0.0f;
-	if (path.length() > 0) {
-		strncpy(cmd.path, path.c_str(), sizeof(cmd.path) - 1);
+	cmd.type = type;
+	cmd.gain = gain;
+	if (path) {
+		strncpy(cmd.path, path, sizeof(cmd.path) - 1);
 		cmd.path[sizeof(cmd.path) - 1] = '\0';
 	} else {
 		cmd.path[0] = '\0';
 	}
-	return (xQueueSend(audioCommandQueue, &cmd, pdMS_TO_TICKS(150)) == pdTRUE);
+	return (xQueueSend(audioCommandQueue, &cmd, timeout) == pdTRUE);
+}
+
+inline bool requestAudioPlay(const String &path) {
+	if (!isSafePath(path) || !isMp3(path))
+		return false;
+	return sendAudioCmd(AudioCmdType::Play, path.c_str());
+}
+
+inline bool requestAudioPlayPlaylist(const String &name) {
+	if (!isSafePlaylistName(name))
+		return false;
+	return sendAudioCmd(AudioCmdType::PlayPlaylist, name.c_str());
+}
+
+inline bool requestAudioStop() { return sendAudioCmd(AudioCmdType::Stop); }
+
+inline bool requestAudioToggle(const String &path = "") {
+	if (path.length() > 0 && (!isSafePath(path) || !isMp3(path)))
+		return false;
+	return sendAudioCmd(AudioCmdType::Toggle, path.length() > 0 ? path.c_str() : nullptr);
 }
 
 inline bool requestAudioVolume(float gain) {
-	if (!audioCommandQueue || !isAudioTaskAlive())
-		return false;
-	AudioCommand cmd;
-	cmd.type = AudioCmdType::SetVolume;
-	cmd.path[0] = '\0';
-	cmd.gain = gain;
-	return (xQueueSend(audioCommandQueue, &cmd, pdMS_TO_TICKS(50)) == pdTRUE);
+	return sendAudioCmd(AudioCmdType::SetVolume, nullptr, gain, pdMS_TO_TICKS(50));
 }
 
 inline bool requestAudioReleaseI2SBlocking() {
-	if (!audioCommandQueue || !audioSyncSem || !isAudioTaskAlive()) {
+	if (!isAudioReady() || !audioSyncSem) {
 		return false;
 	}
 	xSemaphoreTake(audioSyncSem, 0);
-	AudioCommand cmd;
-	cmd.type = AudioCmdType::ReleaseI2S;
-	cmd.path[0] = '\0';
-	cmd.gain = 0.0f;
-	if (xQueueSend(audioCommandQueue, &cmd, pdMS_TO_TICKS(200)) != pdTRUE) {
+	if (!sendAudioCmd(AudioCmdType::ReleaseI2S, nullptr, 0.0f, pdMS_TO_TICKS(200))) {
 		return false;
 	}
 	return (xSemaphoreTake(audioSyncSem, pdMS_TO_TICKS(1500)) == pdTRUE);
 }
 
 inline bool requestAudioReclaimI2SBlocking() {
-	if (!audioCommandQueue || !audioSyncSem || !isAudioTaskAlive()) {
+	if (!isAudioReady() || !audioSyncSem) {
 		return false;
 	}
 	xSemaphoreTake(audioSyncSem, 0);
-	AudioCommand cmd;
-	cmd.type = AudioCmdType::ReclaimI2S;
-	cmd.path[0] = '\0';
-	cmd.gain = 0.0f;
-	if (xQueueSend(audioCommandQueue, &cmd, pdMS_TO_TICKS(200)) != pdTRUE) {
+	if (!sendAudioCmd(AudioCmdType::ReclaimI2S, nullptr, 0.0f, pdMS_TO_TICKS(200))) {
 		return false;
 	}
 	return (xSemaphoreTake(audioSyncSem, pdMS_TO_TICKS(1500)) == pdTRUE);
@@ -508,11 +476,7 @@ inline bool startAudioTask() {
 		BaseType_t res =
 			xTaskCreatePinnedToCore(audioTaskLoop, "audioTask", AUDIO_TASK_STACK_SIZE, nullptr,
 									AUDIO_TASK_PRIORITY, &audioTaskHandle, AUDIO_TASK_CORE);
-		if (res == pdPASS) {
-			audioTaskHeartbeat = millis();
-			return true;
-		}
-		return false;
+		return (res == pdPASS);
 	}
 	return true;
 }
