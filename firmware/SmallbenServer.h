@@ -621,7 +621,7 @@ inline void handleFileUploadProcess() {
 		if (slashIndex != -1)
 			filename = filename.substring(slashIndex + 1);
 
-		if (!isSafeUploadFilename(filename)) {
+		if (!isValidName(filename) || isSystemOrHidden(filename)) {
 			uploadAborted = true;
 			uploadError = "INVALID_FILENAME";
 			return;

@@ -157,7 +157,7 @@ inline bool startTrackInternal(const char *path) {
 		return false;
 	}
 	String p(path);
-	if (!isSafePath(p) || !isMp3(p)) {
+	if (!isValidPath(p) || !isMp3(p)) {
 		return false;
 	}
 
@@ -208,7 +208,7 @@ inline bool startPlaylistInternal(const char *name) {
 		return false;
 	}
 	String pName(name);
-	if (!isSafePlaylistName(pName)) {
+	if (!isValidPlaylistName(pName)) {
 		return false;
 	}
 	size_t count = getPlaylistTrackCount(pName);
@@ -391,13 +391,13 @@ inline bool sendAudioCmd(AudioCmdType type, const char *path = nullptr, float ga
 }
 
 inline bool requestAudioPlay(const String &path) {
-	if (!isSafePath(path) || !isMp3(path))
+	if (!isValidPath(path) || !isMp3(path))
 		return false;
 	return sendAudioCmd(AudioCmdType::Play, path.c_str());
 }
 
 inline bool requestAudioPlayPlaylist(const String &name) {
-	if (!isSafePlaylistName(name))
+	if (!isValidPlaylistName(name))
 		return false;
 	return sendAudioCmd(AudioCmdType::PlayPlaylist, name.c_str());
 }
@@ -405,7 +405,7 @@ inline bool requestAudioPlayPlaylist(const String &name) {
 inline bool requestAudioStop() { return sendAudioCmd(AudioCmdType::Stop); }
 
 inline bool requestAudioToggle(const String &path = "") {
-	if (path.length() > 0 && (!isSafePath(path) || !isMp3(path)))
+	if (path.length() > 0 && (!isValidPath(path) || !isMp3(path)))
 		return false;
 	return sendAudioCmd(AudioCmdType::Toggle, path.length() > 0 ? path.c_str() : nullptr);
 }

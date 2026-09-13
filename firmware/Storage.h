@@ -168,14 +168,6 @@ inline bool isSystemOrHidden(const String &name) {
 	return false;
 }
 
-inline bool isJunk(String name) { return isSystemOrHidden(name); }
-inline bool isSafePath(const String &path) { return isValidPath(path); }
-inline bool isSafePlaylistName(const String &name) { return isValidPlaylistName(name); }
-inline bool isSafeUploadFilename(const String &name) {
-	return isValidName(name) && !isSystemOrHidden(name);
-}
-inline bool isProtectedStoragePath(const String &path) { return isProtectedPath(path); }
-
 inline bool isMp3(String name) {
 	name.toLowerCase();
 	return name.endsWith(".mp3");
