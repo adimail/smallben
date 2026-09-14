@@ -12,6 +12,8 @@
 #include <freertos/task.h>
 #include <vector>
 
+extern bool isBluetoothActive();
+
 enum class AudioCmdType {
 	Play,
 	PlayOnce,
@@ -110,6 +112,42 @@ inline bool isAudioPathActive(const String &targetPath) {
 	return false;
 }
 
+inline bool sendAudioCmd(AudioCmdType type, const char *path = nullptr, float gain = 0.0f,
+						 TickType_t timeout = pdMS_TO_TICKS(150)) {
+	if (!isAudioReady()) {
+		return false;
+	}
+	AudioCommand cmd;
+	cmd.type = type;
+	cmd.gain = gain;
+	if (path) {
+		strncpy(cmd.path, path, sizeof(cmd.path) - 1);
+		cmd.path[sizeof(cmd.path) - 1] = '\0';
+	} else {
+		cmd.path[0] = '\0';
+	}
+	return (xQueueSend(audioCommandQueue, &cmd, timeout) == pdTRUE);
+}
+
+inline void flashErrorLed() {
+	pinMode(RED_LED_PIN, OUTPUT);
+	for (int i = 0; i < 3; i++) {
+		digitalWrite(RED_LED_PIN, HIGH);
+		delay(100);
+		digitalWrite(RED_LED_PIN, LOW);
+		delay(100);
+	}
+}
+
+inline void triggerErrorAudio() {
+	if (isBluetoothActive()) {
+		flashErrorLed();
+		return;
+	}
+	sendAudioCmd(AudioCmdType::PlayOnce, "/smallben/duck.mp3");
+	flashErrorLed();
+}
+
 inline void stopPlaybackInternal() {
 	if (audioMp3) {
 		if (audioMp3->isRunning()) {
@@ -161,22 +199,32 @@ inline bool reclaimAudioI2SInternal() {
 	return true;
 }
 
-inline bool startTrackInternal(const char *path) {
+inline bool startTrackInternal(const char *path, bool isPlaylistTrack = false) {
 	heapLog("startTrackInternal:enter");
 	stopPlaybackInternal();
 	if (!audioOut) {
 		return false;
 	}
 	if (!path || strlen(path) == 0) {
+		if (!isPlaylistTrack) {
+			triggerErrorAudio();
+		}
 		return false;
 	}
 	String p(path);
+	bool isDuck = (p == "/smallben/duck.mp3");
 	if (!isValidPath(p) || !isMp3(p)) {
+		if (!isPlaylistTrack && !isDuck) {
+			triggerErrorAudio();
+		}
 		return false;
 	}
 
 	SdGuard sdGuard;
 	if (!SD.exists(p)) {
+		if (!isPlaylistTrack && !isDuck) {
+			triggerErrorAudio();
+		}
 		return false;
 	}
 
@@ -186,6 +234,9 @@ inline bool startTrackInternal(const char *path) {
 	heapLog("startTrackInternal:after new AudioFileSourceSD");
 	if (!audioFile) {
 		updateAudioState(false, false, false, "");
+		if (!isPlaylistTrack && !isDuck) {
+			triggerErrorAudio();
+		}
 		return false;
 	}
 	audioMp3 = new AudioGeneratorMP3();
@@ -194,6 +245,9 @@ inline bool startTrackInternal(const char *path) {
 		delete audioFile;
 		audioFile = nullptr;
 		updateAudioState(false, false, false, "");
+		if (!isPlaylistTrack && !isDuck) {
+			triggerErrorAudio();
+		}
 		return false;
 	}
 	if (!audioMp3->begin(audioFile, audioOut)) {
@@ -205,6 +259,9 @@ inline bool startTrackInternal(const char *path) {
 		delete audioFile;
 		audioFile = nullptr;
 		updateAudioState(false, false, false, "");
+		if (!isPlaylistTrack && !isDuck) {
+			triggerErrorAudio();
+		}
 		return false;
 	}
 	heapLog("startTrackInternal:after mp3 begin (playing)");
@@ -219,14 +276,17 @@ inline bool startPlaylistInternal(const char *name) {
 	heapLog("startPlaylistInternal:enter");
 	stopAudioInternal();
 	if (!name || strlen(name) == 0) {
+		triggerErrorAudio();
 		return false;
 	}
 	String pName(name);
 	if (!isValidPlaylistName(pName)) {
+		triggerErrorAudio();
 		return false;
 	}
 	audioPlaylistTracks.clear();
 	if (!loadPlaylistTracks(pName, audioPlaylistTracks) || audioPlaylistTracks.empty()) {
+		triggerErrorAudio();
 		return false;
 	}
 	audioIsPlaylist = true;
@@ -238,7 +298,7 @@ inline bool startPlaylistInternal(const char *name) {
 	size_t attempts = 0;
 	while (attempts < count) {
 		const String &trackPath = audioPlaylistTracks[audioCurrentPlaylistIndex];
-		if (startTrackInternal(trackPath.c_str())) {
+		if (startTrackInternal(trackPath.c_str(), true)) {
 			heapLog("startPlaylistInternal:track started");
 			return true;
 		}
@@ -246,6 +306,7 @@ inline bool startPlaylistInternal(const char *name) {
 		attempts++;
 	}
 	stopAudioInternal();
+	triggerErrorAudio();
 	return false;
 }
 
@@ -258,7 +319,7 @@ inline void onTrackFinishedInternal() {
 		bool started = false;
 		while (attempts < count) {
 			const String &nextTrack = audioPlaylistTracks[audioCurrentPlaylistIndex];
-			if (startTrackInternal(nextTrack.c_str())) {
+			if (startTrackInternal(nextTrack.c_str(), true)) {
 				started = true;
 				break;
 			}
@@ -267,10 +328,12 @@ inline void onTrackFinishedInternal() {
 		}
 		if (!started) {
 			stopAudioInternal();
+			triggerErrorAudio();
 		}
 	} else if (strlen(audioCurrentTrack) > 0 && audioCurrentTrackLoop) {
 		if (!startTrackInternal(audioCurrentTrack)) {
 			stopAudioInternal();
+			triggerErrorAudio();
 		}
 	} else {
 		stopAudioInternal();
@@ -389,46 +452,39 @@ inline void audioTaskLoop(void *param) {
 	}
 }
 
-inline bool sendAudioCmd(AudioCmdType type, const char *path = nullptr, float gain = 0.0f,
-						 TickType_t timeout = pdMS_TO_TICKS(150)) {
-	if (!isAudioReady()) {
-		return false;
-	}
-	AudioCommand cmd;
-	cmd.type = type;
-	cmd.gain = gain;
-	if (path) {
-		strncpy(cmd.path, path, sizeof(cmd.path) - 1);
-		cmd.path[sizeof(cmd.path) - 1] = '\0';
-	} else {
-		cmd.path[0] = '\0';
-	}
-	return (xQueueSend(audioCommandQueue, &cmd, timeout) == pdTRUE);
-}
-
 inline bool requestAudioPlay(const String &path) {
-	if (!isValidPath(path) || !isMp3(path))
+	if (!isValidPath(path) || !isMp3(path)) {
+		triggerErrorAudio();
 		return false;
+	}
 	return sendAudioCmd(AudioCmdType::Play, path.c_str());
 }
 
 inline bool requestAudioPlayOnce(const String &path) {
-	if (!isValidPath(path) || !isMp3(path))
+	if (!isValidPath(path) || !isMp3(path)) {
+		if (path != "/smallben/duck.mp3") {
+			triggerErrorAudio();
+		}
 		return false;
+	}
 	return sendAudioCmd(AudioCmdType::PlayOnce, path.c_str());
 }
 
 inline bool requestAudioPlayPlaylist(const String &name) {
-	if (!isValidPlaylistName(name))
+	if (!isValidPlaylistName(name)) {
+		triggerErrorAudio();
 		return false;
+	}
 	return sendAudioCmd(AudioCmdType::PlayPlaylist, name.c_str());
 }
 
 inline bool requestAudioStop() { return sendAudioCmd(AudioCmdType::Stop); }
 
 inline bool requestAudioToggle(const String &path = "") {
-	if (path.length() > 0 && (!isValidPath(path) || !isMp3(path)))
+	if (path.length() > 0 && (!isValidPath(path) || !isMp3(path))) {
+		triggerErrorAudio();
 		return false;
+	}
 	return sendAudioCmd(AudioCmdType::Toggle, path.length() > 0 ? path.c_str() : nullptr);
 }
 

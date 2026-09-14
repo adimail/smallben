@@ -65,6 +65,7 @@ inline void sendJson(int code, const String &body) { server.send(code, "applicat
 inline void sendJsonOk() { sendJson(200, "{\"status\":\"ok\"}"); }
 
 inline void sendJsonError(int code, const String &msg) {
+	triggerErrorAudio();
 	sendJson(code, "{\"error\":\"" + jsonEscape(msg) + "\"}");
 }
 
@@ -516,11 +517,13 @@ inline void handleApiDelete() {
 
 inline void handleApiDownload() {
 	if (!server.hasArg("path")) {
+		triggerErrorAudio();
 		server.send(400, "text/plain", "Missing path parameter");
 		return;
 	}
 	String path = normalizePath(server.arg("path"));
 	if (!isValidPath(path) || isProtectedPath(path)) {
+		triggerErrorAudio();
 		server.send(404, "text/plain", "File not found");
 		return;
 	}
@@ -529,6 +532,7 @@ inline void handleApiDownload() {
 	{
 		SdGuard guard;
 		if (!SD.exists(path)) {
+			triggerErrorAudio();
 			server.send(404, "text/plain", "File not found");
 			return;
 		}
@@ -536,6 +540,7 @@ inline void handleApiDownload() {
 		if (!file || file.isDirectory()) {
 			if (file)
 				file.close();
+			triggerErrorAudio();
 			server.send(400, "text/plain", "Cannot download directory");
 			return;
 		}
@@ -708,6 +713,7 @@ inline void handleFileUploadProcess() {
 
 inline void handleFileUploadResponse() {
 	if (uploadAborted) {
+		triggerErrorAudio();
 		String err = uploadError.length() > 0 ? uploadError : "UPLOAD_FAILED";
 		sendJson(400, "{\"status\":\"error\",\"error\":\"" + jsonEscape(err) + "\"}");
 	} else {

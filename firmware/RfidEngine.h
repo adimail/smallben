@@ -351,12 +351,16 @@ inline void handleRfidPoll() {
 					heapLog("RFID:before requestAudioPlay(track)");
 					if (requestAudioPlay(g_rfidActiveMapping.target)) {
 						g_rfidAudioPlaying = true;
+					} else {
+						triggerErrorAudio();
 					}
 					heapLog("RFID:after requestAudioPlay(track)");
 				} else if (g_rfidActiveMapping.type == "playlist") {
 					heapLog("RFID:before requestAudioPlayPlaylist");
 					if (requestAudioPlayPlaylist(g_rfidActiveMapping.target)) {
 						g_rfidAudioPlaying = true;
+					} else {
+						triggerErrorAudio();
 					}
 					heapLog("RFID:after requestAudioPlayPlaylist");
 				}

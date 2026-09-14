@@ -101,6 +101,7 @@ inline void applyMode(PlaybackMode mode) {
 			setRfidEnabled(true);
 			currentMode = PlaybackMode::Disc;
 			applyPotVolume();
+			triggerErrorAudio();
 			heapLog("applyMode:BT start FAILED, reverted to Disc");
 			return;
 		}
