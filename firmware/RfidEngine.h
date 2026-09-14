@@ -324,16 +324,29 @@ inline void handleRfidPoll() {
 			g_rfidIsPresent = true;
 			g_rfidMissedPings = 0;
 			g_rfidAudioPlaying = false;
-			findDiscMappingOnSd(detectedUid, g_rfidActiveMapping);
+
+			bool mapped = findDiscMappingOnSd(detectedUid, g_rfidActiveMapping);
+
+			digitalWrite(RED_LED_PIN, HIGH);
+			delay(150);
+			digitalWrite(RED_LED_PIN, LOW);
+
+			if (!mapped) {
+				delay(150);
+				digitalWrite(RED_LED_PIN, HIGH);
+				delay(150);
+				digitalWrite(RED_LED_PIN, LOW);
+				requestAudioPlayOnce("/smallben/sheep.mp3");
+			}
 		} else {
 			g_rfidMissedPings = 0;
 		}
 
 		if (isNew) {
 			heapLog("RFID:disc DETECTED (new)");
-			requestAudioStop();
-			heapLog("RFID:after requestAudioStop");
 			if (g_rfidActiveMapping.target.length() > 0) {
+				requestAudioStop();
+
 				if (g_rfidActiveMapping.type == "track") {
 					heapLog("RFID:before requestAudioPlay(track)");
 					if (requestAudioPlay(g_rfidActiveMapping.target)) {

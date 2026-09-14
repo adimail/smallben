@@ -12,7 +12,16 @@
 #include <freertos/task.h>
 #include <vector>
 
-enum class AudioCmdType { Play, PlayPlaylist, Stop, Toggle, ReleaseI2S, ReclaimI2S, SetVolume };
+enum class AudioCmdType {
+	Play,
+	PlayOnce,
+	PlayPlaylist,
+	Stop,
+	Toggle,
+	ReleaseI2S,
+	ReclaimI2S,
+	SetVolume
+};
 
 struct AudioCommand {
 	AudioCmdType type;
@@ -38,6 +47,7 @@ static bool audioIsPlaylist = false;
 static char audioCurrentPlaylistName[64] = {0};
 static size_t audioCurrentPlaylistIndex = 0;
 static char audioCurrentTrack[128] = {0};
+static bool audioCurrentTrackLoop = true;
 static std::vector<String> audioPlaylistTracks;
 
 static SemaphoreHandle_t audioStateMutex = nullptr;
@@ -127,6 +137,7 @@ inline void stopAudioInternal() {
 	audioCurrentPlaylistName[0] = '\0';
 	audioCurrentPlaylistIndex = 0;
 	audioCurrentTrack[0] = '\0';
+	audioCurrentTrackLoop = false;
 	audioPlaylistTracks.clear();
 }
 
@@ -257,7 +268,7 @@ inline void onTrackFinishedInternal() {
 		if (!started) {
 			stopAudioInternal();
 		}
-	} else if (strlen(audioCurrentTrack) > 0) {
+	} else if (strlen(audioCurrentTrack) > 0 && audioCurrentTrackLoop) {
 		if (!startTrackInternal(audioCurrentTrack)) {
 			stopAudioInternal();
 		}
@@ -288,6 +299,7 @@ inline void togglePlayInternal(const char *path) {
 		audioIsPlaylist = false;
 		audioCurrentPlaylistName[0] = '\0';
 		audioCurrentPlaylistIndex = 0;
+		audioCurrentTrackLoop = true;
 		startTrackInternal(path);
 		return;
 	}
@@ -328,9 +340,18 @@ inline void audioTaskLoop(void *param) {
 				audioIsPlaylist = false;
 				audioCurrentPlaylistName[0] = '\0';
 				audioCurrentPlaylistIndex = 0;
+				audioCurrentTrackLoop = true;
+				startTrackInternal(cmd.path);
+				break;
+			case AudioCmdType::PlayOnce:
+				audioIsPlaylist = false;
+				audioCurrentPlaylistName[0] = '\0';
+				audioCurrentPlaylistIndex = 0;
+				audioCurrentTrackLoop = false;
 				startTrackInternal(cmd.path);
 				break;
 			case AudioCmdType::PlayPlaylist:
+				audioCurrentTrackLoop = false;
 				startPlaylistInternal(cmd.path);
 				break;
 			case AudioCmdType::Stop:
@@ -389,6 +410,12 @@ inline bool requestAudioPlay(const String &path) {
 	if (!isValidPath(path) || !isMp3(path))
 		return false;
 	return sendAudioCmd(AudioCmdType::Play, path.c_str());
+}
+
+inline bool requestAudioPlayOnce(const String &path) {
+	if (!isValidPath(path) || !isMp3(path))
+		return false;
+	return sendAudioCmd(AudioCmdType::PlayOnce, path.c_str());
 }
 
 inline bool requestAudioPlayPlaylist(const String &name) {

@@ -197,10 +197,30 @@ inline void handleButton() {
 	}
 }
 
+inline void updateLeds() {
+	if (isWiFiEnabled()) {
+		digitalWrite(WIFI_LED_PIN, HIGH);
+	} else if (currentMode == PlaybackMode::Bluetooth) {
+		if (isBluetoothConnected()) {
+			digitalWrite(WIFI_LED_PIN, LOW);
+		} else {
+			digitalWrite(WIFI_LED_PIN, (millis() / 500) % 2);
+		}
+	} else {
+		digitalWrite(WIFI_LED_PIN, LOW);
+	}
+}
+
 inline void initControls() {
 	pinMode(VOLUME_POT_PIN, INPUT);
 	pinMode(WIFI_BUTTON_PIN, INPUT_PULLUP);
 	pinMode(MODE_SWITCH_PIN, INPUT_PULLUP);
+
+	pinMode(RED_LED_PIN, OUTPUT);
+	pinMode(WIFI_LED_PIN, OUTPUT);
+
+	digitalWrite(RED_LED_PIN, LOW);
+	digitalWrite(WIFI_LED_PIN, LOW);
 
 	btnState = ButtonMachineState::Idle;
 	btnLongPressFired = false;
@@ -213,6 +233,7 @@ inline void initControls() {
 	} else {
 		applyMode(PlaybackMode::Disc);
 	}
+	updateLeds();
 }
 
 inline void handleControls() {
@@ -228,4 +249,5 @@ inline void handleControls() {
 			heapLog(nowConnected ? "BT client CONNECTED" : "BT client DISCONNECTED");
 		}
 	}
+	updateLeds();
 }

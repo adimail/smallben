@@ -13,11 +13,12 @@
 #define RFID_SS_PIN 21
 #define RFID_RST_PIN 22
 #define RFID_SCK_PIN 14
-#define RFID_MISO_PIN 4
+#define RFID_MISO_PIN 35
 #define RFID_MOSI_PIN 13
 
 #define WIFI_BUTTON_PIN 32
 #define WIFI_LED_PIN 33
+#define RED_LED_PIN 4
 
 #define MODE_SWITCH_PIN 16
 #define VOLUME_POT_PIN 34
@@ -54,7 +55,8 @@ const int I2S_DMA_BUFFER_COUNT = 8;
 
 const size_t MAX_PLAYLIST_TRACKS = 128;
 
-inline void heapLog(const char *tag) {
-	Serial.printf("[HEAP] %-28s free=%u maxalloc=%u minever=%u psram=%u\n", tag, ESP.getFreeHeap(),
-				  ESP.getMaxAllocHeap(), ESP.getMinFreeHeap(), ESP.getPsramSize());
-}
+// inline void heapLog(const char *tag) {
+// 	Serial.printf("[HEAP] %-28s free=%u maxalloc=%u minever=%u psram=%u\n", tag, ESP.getFreeHeap(),
+// 				  ESP.getMaxAllocHeap(), ESP.getMinFreeHeap(), ESP.getPsramSize());
+// }
+inline void heapLog(const char *tag) {}

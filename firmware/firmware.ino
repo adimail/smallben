@@ -33,22 +33,29 @@ void setup() {
 	}
 
 	delay(100);
+
+	if (audioOk) {
+		requestAudioPlayOnce("/smallben/plen.mp3");
+	}
+
 	initControls();
 	heapLog("after initControls");
 }
 
 void loop() {
 	static unsigned long lastLog = 0;
+
 	handleControls();
 	handleRfidLoop();
+
 	if (isWiFiEnabled()) {
 		handleServer();
 	}
+
 	if (millis() - lastLog > 3000) {
 		lastLog = millis();
 		heapLog("loop tick");
 	}
+
 	vTaskDelay(pdMS_TO_TICKS(1));
 }
-
-
