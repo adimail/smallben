@@ -18,6 +18,7 @@
 
 #define WIFI_BUTTON_PIN 32
 #define WIFI_LED_PIN 33
+#define BT_LED_PIN 17
 #define RED_LED_PIN 4
 
 #define MODE_SWITCH_PIN 16

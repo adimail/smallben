@@ -199,16 +199,15 @@ inline void handleButton() {
 }
 
 inline void updateLeds() {
-	if (isWiFiEnabled()) {
-		digitalWrite(WIFI_LED_PIN, HIGH);
-	} else if (currentMode == PlaybackMode::Bluetooth) {
+	digitalWrite(WIFI_LED_PIN, isWiFiEnabled() ? HIGH : LOW);
+	if (currentMode == PlaybackMode::Bluetooth) {
 		if (isBluetoothConnected()) {
-			digitalWrite(WIFI_LED_PIN, LOW);
+			digitalWrite(BT_LED_PIN, HIGH);
 		} else {
-			digitalWrite(WIFI_LED_PIN, (millis() / 500) % 2);
+			digitalWrite(BT_LED_PIN, (millis() / 500) % 2);
 		}
 	} else {
-		digitalWrite(WIFI_LED_PIN, LOW);
+		digitalWrite(BT_LED_PIN, LOW);
 	}
 }
 
@@ -219,9 +218,11 @@ inline void initControls() {
 
 	pinMode(RED_LED_PIN, OUTPUT);
 	pinMode(WIFI_LED_PIN, OUTPUT);
+	pinMode(BT_LED_PIN, OUTPUT);
 
 	digitalWrite(RED_LED_PIN, LOW);
 	digitalWrite(WIFI_LED_PIN, LOW);
+	digitalWrite(BT_LED_PIN, LOW);
 
 	btnState = ButtonMachineState::Idle;
 	btnLongPressFired = false;
