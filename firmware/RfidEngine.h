@@ -5,6 +5,7 @@
 #include <Arduino.h>
 #include <MFRC522.h>
 #include <SPI.h>
+#include <vector>
 
 struct DiscMappingRecord {
 	String uid;
@@ -62,6 +63,32 @@ inline bool parseMappingLine(const String &line, DiscMappingRecord &record) {
 		return (record.uid.length() > 0 && record.target.length() > 0);
 	}
 	return false;
+}
+
+inline bool getAllDiscMappings(std::vector<DiscMappingRecord> &outRecords) {
+	if (!isStorageReady()) {
+		return false;
+	}
+	SdGuard guard;
+	if (!SD.exists("/discs.csv")) {
+		return false;
+	}
+	File f = SD.open("/discs.csv", FILE_READ);
+	if (!f) {
+		return false;
+	}
+	while (f.available()) {
+		String line = f.readStringUntil('\n');
+		line.trim();
+		if (line.length() == 0)
+			continue;
+		DiscMappingRecord rec;
+		if (parseMappingLine(line, rec)) {
+			outRecords.push_back(rec);
+		}
+	}
+	f.close();
+	return true;
 }
 
 inline bool findDiscMappingOnSd(const String &searchUid, DiscMappingRecord &outRecord) {

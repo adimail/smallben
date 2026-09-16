@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <SD.h>
 #include <SPI.h>
+#include <WiFiClient.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <vector>
@@ -17,6 +18,31 @@ enum class StorageResult {
 	NoSpace,
 	StorageUnavailable,
 	Fail
+};
+
+struct StorageEntry {
+	String name;
+	bool isDir;
+	size_t size;
+	String path;
+};
+
+struct PlaylistSummary {
+	String name;
+	int trackCount;
+};
+
+struct PlaylistTrackInfo {
+	String name;
+	String path;
+	size_t size;
+	bool exists;
+};
+
+struct UploadSession {
+	File file;
+	String tempPath;
+	String finalPath;
 };
 
 static SPIClass sdSPI(HSPI);
@@ -338,21 +364,6 @@ inline StorageResult deleteFileUnderLock(const String &path) {
 	return StorageResult::Ok;
 }
 
-inline StorageResult deleteFile(const String &path) {
-	if (!g_sdReady)
-		return StorageResult::StorageUnavailable;
-	String p = normalizePath(path);
-	if (!isValidPath(p))
-		return StorageResult::InvalidPath;
-	if (isProtectedPath(p))
-		return StorageResult::Protected;
-	if (isAudioPathCurrentlyActive(p))
-		return StorageResult::Active;
-
-	SdGuard guard;
-	return deleteFileUnderLock(p);
-}
-
 inline StorageResult deleteEmptyDirectoryUnderLock(const String &path) {
 	if (!SD.exists(path)) {
 		return StorageResult::NotFound;
@@ -374,21 +385,6 @@ inline StorageResult deleteEmptyDirectoryUnderLock(const String &path) {
 		return StorageResult::Fail;
 	}
 	return StorageResult::Ok;
-}
-
-inline StorageResult deleteEmptyDirectory(const String &path) {
-	if (!g_sdReady)
-		return StorageResult::StorageUnavailable;
-	String p = normalizePath(path);
-	if (!isValidPath(p))
-		return StorageResult::InvalidPath;
-	if (p == "/" || isProtectedPath(p))
-		return StorageResult::Protected;
-	if (isAudioPathCurrentlyActive(p))
-		return StorageResult::Active;
-
-	SdGuard guard;
-	return deleteEmptyDirectoryUnderLock(p);
 }
 
 inline StorageResult deleteStoragePath(const String &path) {
@@ -419,96 +415,350 @@ inline StorageResult deleteStoragePath(const String &path) {
 	return deleteFileUnderLock(p);
 }
 
-inline StorageResult renameStoragePath(const String &oldPath, const String &newPath) {
-	if (!g_sdReady)
-		return StorageResult::StorageUnavailable;
-	String src = normalizePath(oldPath);
-	String dst = normalizePath(newPath);
-	if (!isValidPath(src) || !isValidPath(dst))
-		return StorageResult::InvalidPath;
-	if (isProtectedPath(src) || isProtectedPath(dst))
-		return StorageResult::Protected;
-	if (isAudioPathCurrentlyActive(src) || isAudioPathCurrentlyActive(dst))
-		return StorageResult::Active;
-
-	SdGuard guard;
-	if (!SD.exists(src)) {
-		return StorageResult::NotFound;
-	}
-	if (SD.exists(dst)) {
-		return StorageResult::AlreadyExists;
-	}
-	if (!SD.rename(src, dst)) {
-		return StorageResult::Fail;
-	}
-	if (!SD.exists(dst)) {
-		return StorageResult::Fail;
-	}
-	return StorageResult::Ok;
-}
-
 inline StorageResult replaceFileSafelyUnderLock(const String &tempPath, const String &destPath) {
-	String bakPath = destPath + ".bak";
-	bool hadDest = SD.exists(destPath);
-
-	if (hadDest) {
-		if (SD.exists(bakPath)) {
-			SD.remove(bakPath);
-		}
-		if (!SD.rename(destPath, bakPath)) {
-			SD.remove(tempPath);
-			return StorageResult::Fail;
-		}
+	if (SD.exists(destPath)) {
+		SD.remove(destPath);
 	}
-
 	if (!SD.rename(tempPath, destPath)) {
-		if (hadDest) {
-			SD.rename(bakPath, destPath);
-		}
 		SD.remove(tempPath);
 		return StorageResult::Fail;
 	}
-
-	if (hadDest && SD.exists(bakPath)) {
-		SD.remove(bakPath);
-	}
-
 	if (!SD.exists(destPath)) {
 		return StorageResult::Fail;
 	}
 	return StorageResult::Ok;
 }
 
-inline StorageResult commitUploadFile(const String &tempPath, const String &destPath,
-									  size_t expectedSize) {
+inline StorageResult openUploadSession(const String &finalPath, UploadSession &session) {
 	if (!g_sdReady)
 		return StorageResult::StorageUnavailable;
-	String tmp = normalizePath(tempPath);
-	String dst = normalizePath(destPath);
-	if (!isValidPath(dst))
+	session.finalPath = finalPath;
+	session.tempPath = finalPath + ".tmp";
+	SdGuard guard;
+	if (SD.exists(session.tempPath))
+		SD.remove(session.tempPath);
+	session.file = SD.open(session.tempPath, FILE_WRITE);
+	if (!session.file)
+		return StorageResult::Fail;
+	return StorageResult::Ok;
+}
+
+inline StorageResult writeUploadSession(UploadSession &session, const uint8_t *data, size_t len) {
+	if (!session.file)
+		return StorageResult::Fail;
+	SdGuard guard;
+	size_t written = session.file.write(data, len);
+	return (written == len) ? StorageResult::Ok : StorageResult::Fail;
+}
+
+inline StorageResult closeUploadSession(UploadSession &session, bool commit) {
+	if (session.file) {
+		SdGuard guard;
+		session.file.close();
+	}
+	SdGuard guard;
+	if (commit) {
+		return replaceFileSafelyUnderLock(session.tempPath, session.finalPath);
+	} else {
+		if (SD.exists(session.tempPath))
+			SD.remove(session.tempPath);
+		return StorageResult::Ok;
+	}
+}
+
+inline StorageResult getDirectoryEntries(const String &path, int offset, int limit,
+										 std::vector<StorageEntry> &entries, int &totalCount,
+										 bool &hasMore) {
+	if (!g_sdReady)
+		return StorageResult::StorageUnavailable;
+	String p = normalizePath(path);
+	if (!isValidPath(p))
 		return StorageResult::InvalidPath;
-	if (isProtectedPath(dst))
-		return StorageResult::Protected;
-	if (isAudioPathCurrentlyActive(dst))
-		return StorageResult::Active;
 
 	SdGuard guard;
-	if (!SD.exists(tmp)) {
+	if (!SD.exists(p))
+		return StorageResult::NotFound;
+	File dir = SD.open(p);
+	if (!dir || !dir.isDirectory()) {
+		if (dir)
+			dir.close();
 		return StorageResult::NotFound;
 	}
-	File tf = SD.open(tmp, FILE_READ);
-	if (!tf) {
-		SD.remove(tmp);
-		return StorageResult::Fail;
+
+	totalCount = 0;
+	int collected = 0;
+	while (true) {
+		File entry = dir.openNextFile();
+		if (!entry)
+			break;
+		String ename = entry.name();
+		bool edir = entry.isDirectory();
+		size_t esz = entry.size();
+		entry.close();
+
+		if (isSystemOrHidden(ename))
+			continue;
+
+		if (totalCount >= offset && collected < limit) {
+			String fullPath = (p == "/" ? "" : p) + "/" + ename;
+			entries.push_back({ename, edir, esz, fullPath});
+			collected++;
+		}
+		totalCount++;
 	}
-	size_t actualSize = tf.size();
-	tf.close();
-	if (actualSize != expectedSize) {
-		SD.remove(tmp);
+	dir.close();
+
+	hasMore = (offset + collected) < totalCount;
+	return StorageResult::Ok;
+}
+
+inline void scanMp3DirectoryRecursive(const String &dirPath, int offset, int limit,
+									  std::vector<StorageEntry> &entries, int &currentIndex,
+									  int &totalCount, int maxDepth = 4) {
+	if (maxDepth <= 0)
+		return;
+	File dir = SD.open(dirPath);
+	if (!dir || !dir.isDirectory()) {
+		if (dir)
+			dir.close();
+		return;
+	}
+
+	while (true) {
+		File entry = dir.openNextFile();
+		if (!entry)
+			break;
+		String name = entry.name();
+		bool isDir = entry.isDirectory();
+		size_t sz = entry.size();
+		entry.close();
+
+		String lower = name;
+		lower.toLowerCase();
+		if (isSystemOrHidden(name) || lower == "smallben" || lower == "p" || lower == "playlists")
+			continue;
+
+		String fullPath = (dirPath == "/" ? "" : dirPath) + "/" + name;
+		if (isDir) {
+			scanMp3DirectoryRecursive(fullPath, offset, limit, entries, currentIndex, totalCount,
+									  maxDepth - 1);
+		} else if (isMp3(name)) {
+			if (currentIndex >= offset && (int)entries.size() < limit) {
+				entries.push_back({name, false, sz, fullPath});
+			}
+			currentIndex++;
+			totalCount++;
+		}
+	}
+	dir.close();
+}
+
+inline StorageResult getMp3TracksPaginated(int offset, int limit,
+										   std::vector<StorageEntry> &entries, int &totalCount,
+										   bool &hasMore) {
+	if (!g_sdReady)
+		return StorageResult::StorageUnavailable;
+	SdGuard guard;
+	totalCount = 0;
+	int currentIndex = 0;
+	scanMp3DirectoryRecursive("/", offset, limit, entries, currentIndex, totalCount, 4);
+	hasMore = (offset + (int)entries.size()) < totalCount;
+	return StorageResult::Ok;
+}
+
+inline StorageResult streamFileToClient(const String &path, WiFiClient &client, size_t &fileSize) {
+	if (!g_sdReady)
+		return StorageResult::StorageUnavailable;
+	String p = normalizePath(path);
+	if (!isValidPath(p) || isProtectedPath(p))
+		return StorageResult::InvalidPath;
+
+	SdGuard guard;
+	if (!SD.exists(p))
+		return StorageResult::NotFound;
+	File file = SD.open(p, FILE_READ);
+	if (!file || file.isDirectory()) {
+		if (file)
+			file.close();
 		return StorageResult::Fail;
 	}
 
-	return replaceFileSafelyUnderLock(tmp, dst);
+	fileSize = file.size();
+	uint8_t buffer[2048];
+	size_t bytesSent = 0;
+
+	while (bytesSent < fileSize && client.connected()) {
+		size_t toRead = sizeof(buffer);
+		if (bytesSent + toRead > fileSize) {
+			toRead = fileSize - bytesSent;
+		}
+		size_t actualRead = file.read(buffer, toRead);
+		if (actualRead == 0)
+			break;
+		size_t written = client.write(buffer, actualRead);
+		bytesSent += written;
+		if (written != actualRead)
+			break;
+		vTaskDelay(pdMS_TO_TICKS(1));
+	}
+	file.close();
+	return StorageResult::Ok;
+}
+
+inline StorageResult getAllPlaylists(std::vector<PlaylistSummary> &list) {
+	if (!g_sdReady)
+		return StorageResult::StorageUnavailable;
+	SdGuard guard;
+	File dir = SD.open("/p");
+	if (!dir || !dir.isDirectory()) {
+		if (dir)
+			dir.close();
+		return StorageResult::Ok;
+	}
+
+	while (true) {
+		File entry = dir.openNextFile();
+		if (!entry)
+			break;
+		String name = entry.name();
+		bool isDir = entry.isDirectory();
+		entry.close();
+
+		String lower = name;
+		lower.toLowerCase();
+		if (!isDir && lower.endsWith(".m3u") && !name.startsWith(".")) {
+			String fullPath = "/p/" + name;
+			int count = 0;
+			File f = SD.open(fullPath, FILE_READ);
+			if (f) {
+				while (f.available()) {
+					String line = f.readStringUntil('\n');
+					line.trim();
+					if (line.length() > 0 && !line.startsWith("#")) {
+						count++;
+					}
+				}
+				f.close();
+			}
+			String baseName = name.substring(0, name.length() - 4);
+			list.push_back({baseName, count});
+		}
+	}
+	dir.close();
+	return StorageResult::Ok;
+}
+
+inline StorageResult getPlaylistTracks(const String &id, std::vector<PlaylistTrackInfo> &tracks) {
+	if (!g_sdReady)
+		return StorageResult::StorageUnavailable;
+	if (!isValidPlaylistName(id))
+		return StorageResult::InvalidPath;
+	String pPath = getPlaylistPath(id);
+
+	SdGuard guard;
+	if (!SD.exists(pPath))
+		return StorageResult::NotFound;
+	File f = SD.open(pPath, FILE_READ);
+	if (!f)
+		return StorageResult::NotFound;
+
+	while (f.available()) {
+		String line = f.readStringUntil('\n');
+		line.trim();
+		if (line.length() > 0 && !line.startsWith("#")) {
+			String tPath = line;
+			int slash = tPath.lastIndexOf('/');
+			String tName = (slash != -1) ? tPath.substring(slash + 1) : tPath;
+			size_t sz = 0;
+			bool exists = false;
+			if (SD.exists(tPath)) {
+				File tf = SD.open(tPath, FILE_READ);
+				if (tf) {
+					sz = tf.size();
+					exists = true;
+					tf.close();
+				}
+			}
+			tracks.push_back({tName, tPath, sz, exists});
+		}
+	}
+	f.close();
+	return StorageResult::Ok;
+}
+
+inline StorageResult setPlaylistTracks(const String &id, const std::vector<String> &tracks) {
+	if (!g_sdReady)
+		return StorageResult::StorageUnavailable;
+	if (!isValidPlaylistName(id))
+		return StorageResult::InvalidPath;
+	if (tracks.size() > MAX_PLAYLIST_TRACKS)
+		return StorageResult::NoSpace;
+
+	String destPath = getPlaylistPath(id);
+	String tempPath = destPath + ".tmp";
+
+	SdGuard guard;
+	if (SD.exists(tempPath))
+		SD.remove(tempPath);
+	File outF = SD.open(tempPath, FILE_WRITE);
+	if (!outF)
+		return StorageResult::Fail;
+
+	for (size_t i = 0; i < tracks.size(); i++) {
+		String tp = normalizePath(tracks[i]);
+		if (!isValidPath(tp) || !isMp3(tp)) {
+			outF.close();
+			SD.remove(tempPath);
+			return StorageResult::InvalidPath;
+		}
+		outF.println(tp);
+	}
+	outF.close();
+
+	return replaceFileSafelyUnderLock(tempPath, destPath);
+}
+
+inline std::vector<String> getPlaylistsContainingTrack(const String &trackPath) {
+	std::vector<String> matched;
+	if (!g_sdReady || !isValidPath(trackPath))
+		return matched;
+
+	SdGuard guard;
+	File dir = SD.open("/p");
+	if (!dir || !dir.isDirectory()) {
+		if (dir)
+			dir.close();
+		return matched;
+	}
+
+	while (true) {
+		File entry = dir.openNextFile();
+		if (!entry)
+			break;
+		String name = entry.name();
+		bool isDir = entry.isDirectory();
+		entry.close();
+
+		String lower = name;
+		lower.toLowerCase();
+		if (!isDir && lower.endsWith(".m3u") && !name.startsWith(".")) {
+			String fullPath = "/p/" + name;
+			File f = SD.open(fullPath, FILE_READ);
+			if (f) {
+				while (f.available()) {
+					String line = f.readStringUntil('\n');
+					line.trim();
+					if (line == trackPath) {
+						matched.push_back(name.substring(0, name.length() - 4));
+						break;
+					}
+				}
+				f.close();
+			}
+		}
+	}
+	dir.close();
+	return matched;
 }
 
 inline StorageResult createPlaylist(const String &name) {

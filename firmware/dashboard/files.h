@@ -24,5 +24,6 @@ const char DASHBOARD_FILES_HTML[] PROGMEM = R"HTML(
     <div class="progress-txt" id="pTxt">0%</div>
   </div>
   <div class="file-list" id="browserFileList"></div>
+  <button class="btn-loadmore" id="btnFilesLoadMore" style="display:none">Load More</button>
 </div>
 )HTML";

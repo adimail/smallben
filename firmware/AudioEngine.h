@@ -19,6 +19,8 @@ enum class AudioCmdType {
 	PlayOnce,
 	PlayPlaylist,
 	Stop,
+	Pause,
+	Resume,
 	Toggle,
 	ReleaseI2S,
 	ReclaimI2S,
@@ -167,6 +169,31 @@ inline void stopPlaybackInternal() {
 		audioOut->stop();
 	}
 	updateAudioState(false, false, false, "");
+}
+
+inline void pausePlaybackInternal() {
+	if (!audioOut) {
+		return;
+	}
+	AudioState state = getAudioState();
+	if (state.isPlaying && !state.isPaused) {
+		audioOut->stop();
+		updateAudioState(true, true, false, state.path);
+	}
+}
+
+inline void resumePlaybackInternal() {
+	if (!audioOut) {
+		return;
+	}
+	AudioState state = getAudioState();
+	if (state.isPlaying && state.isPaused) {
+		if (audioOut->begin()) {
+			updateAudioState(true, false, false, state.path);
+		} else {
+			stopPlaybackInternal();
+		}
+	}
 }
 
 inline void stopAudioInternal() {
@@ -424,6 +451,12 @@ inline void audioTaskLoop(void *param) {
 					xQueueReceive(audioCommandQueue, &cmd, 0);
 				}
 				break;
+			case AudioCmdType::Pause:
+				pausePlaybackInternal();
+				break;
+			case AudioCmdType::Resume:
+				resumePlaybackInternal();
+				break;
 			case AudioCmdType::Toggle:
 				togglePlayInternal(cmd.path);
 				break;
@@ -479,6 +512,10 @@ inline bool requestAudioPlayPlaylist(const String &name) {
 }
 
 inline bool requestAudioStop() { return sendAudioCmd(AudioCmdType::Stop); }
+
+inline bool requestAudioPause() { return sendAudioCmd(AudioCmdType::Pause); }
+
+inline bool requestAudioResume() { return sendAudioCmd(AudioCmdType::Resume); }
 
 inline bool requestAudioToggle(const String &path = "") {
 	if (path.length() > 0 && (!isValidPath(path) || !isMp3(path))) {

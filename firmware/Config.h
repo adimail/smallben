@@ -3,11 +3,11 @@
 
 #define SD_CS_PIN 5
 #define SD_SCK_PIN 18
-#define SD_MISO_PIN 19
-#define SD_MOSI_PIN 23
+#define SD_MISO_PIN 23
+#define SD_MOSI_PIN 19
 
-#define I2S_BCLK_PIN 27
-#define I2S_LRC_PIN 26
+#define I2S_BCLK_PIN 26
+#define I2S_LRC_PIN 27
 #define I2S_DIN_PIN 25
 
 #define RFID_SS_PIN 21
@@ -17,7 +17,7 @@
 #define RFID_MOSI_PIN 13
 
 #define WIFI_BUTTON_PIN 32
-#define WIFI_LED_PIN 33
+#define WIFI_LED_PIN 2
 #define BT_LED_PIN 17
 #define RED_LED_PIN 4
 
@@ -30,7 +30,7 @@ const uint16_t HTTP_PORT = 80;
 
 const char *BT_DEVICE_NAME = "Smallben";
 
-const size_t MAX_UPLOAD_SIZE = 10485760;
+const size_t MAX_UPLOAD_SIZE = 104857600;
 const size_t MAX_PLAYLISTS = 10;
 const size_t MIN_SD_FREE_MARGIN = 2097152;
 const size_t MAX_JSON_BODY_SIZE = 16384;
@@ -50,14 +50,14 @@ const size_t NUM_HIDDEN_PREFIXES = sizeof(HIDDEN_PREFIXES) / sizeof(HIDDEN_PREFI
 
 const uint32_t AUDIO_TASK_STACK_SIZE = 8192;
 const UBaseType_t AUDIO_TASK_PRIORITY = 5;
-const BaseType_t AUDIO_TASK_CORE = 1;
+const BaseType_t AUDIO_TASK_CORE = 0;
 const TickType_t AUDIO_TASK_DELAY_TICKS = 1;
 const int I2S_DMA_BUFFER_COUNT = 8;
 
 const size_t MAX_PLAYLIST_TRACKS = 128;
 
-// inline void heapLog(const char *tag) {
-// 	Serial.printf("[HEAP] %-28s free=%u maxalloc=%u minever=%u psram=%u\n", tag, ESP.getFreeHeap(),
-// 				  ESP.getMaxAllocHeap(), ESP.getMinFreeHeap(), ESP.getPsramSize());
-// }
-inline void heapLog(const char *tag) {}
+inline void heapLog(const char *tag) {
+	Serial.printf("[HEAP] %-28s free=%u maxalloc=%u minever=%u psram=%u\n", tag, ESP.getFreeHeap(),
+				  ESP.getMaxAllocHeap(), ESP.getMinFreeHeap(), ESP.getPsramSize());
+}
+// inline void heapLog(const char *tag) {}
