@@ -5,7 +5,6 @@ const char DASHBOARD_JS[] PROGMEM = R"JS(
 let tracks = [];
 let playlists = [];
 let discs = [];
-let showAllTracks = false;
 let currentPlaylist = null;
 let currentPlaylistTracks = [];
 let playingPath = '';
@@ -16,6 +15,15 @@ let isFetchingNow = false;
 let currentFolder = '/';
 let activeSelectedTrack = null;
 let toastTimer = null;
+
+let filesOffset = 0;
+let filesLimit = 30;
+let filesHasMore = false;
+
+let tracksOffset = 0;
+let tracksLimit = 30;
+let tracksHasMore = false;
+let tracksTotal = 0;
 
 const tabTracks = document.getElementById('tabTracks');
 const tabDiscs = document.getElementById('tabDiscs');
@@ -55,6 +63,7 @@ const pBar = document.getElementById('pBar');
 const pTxt = document.getElementById('pTxt');
 const fileBreadcrumbs = document.getElementById('fileBreadcrumbs');
 const browserFileList = document.getElementById('browserFileList');
+const btnFilesLoadMore = document.getElementById('btnFilesLoadMore');
 const btnNewFolder = document.getElementById('btnNewFolder');
 const newFolderForm = document.getElementById('newFolderForm');
 const newFolderNameInput = document.getElementById('newFolderNameInput');
@@ -157,10 +166,10 @@ function switchView(viewName, pushState = true){
   viewDiscs.classList.toggle('active', viewName === 'discs');
   viewPlaylists.classList.toggle('active', viewName === 'playlists');
   viewFiles.classList.toggle('active', viewName === 'files');
-  if(viewName === 'files') loadFolder(currentFolder);
+  if(viewName === 'files') loadFolder(currentFolder, false);
   if(viewName === 'discs') loadDiscs();
   if(viewName === 'playlists' && !currentPlaylist) loadPlaylists();
-  if(viewName === 'tracks' && !tracks.length) loadLibrary();
+  if(viewName === 'tracks' && !tracks.length) loadLibrary(false);
 }
 
 tabTracks.onclick = () => switchView('tracks');
@@ -322,8 +331,7 @@ function renderTracks(){
     btnLoadMore.style.display = 'none';
     return;
   }
-  const slice = showAllTracks ? tracks : tracks.slice(0, 8);
-  slice.forEach((t, i) => {
+  tracks.forEach((t, i) => {
     const row = document.createElement('div');
     row.className = 'track-row';
     row.onclick = () => openTrackDrawer(t);
@@ -357,27 +365,37 @@ function renderTracks(){
     trackList.appendChild(row);
   });
 
-  if(tracks.length > 8){
+  if(tracksHasMore){
     btnLoadMore.style.display = 'block';
-    btnLoadMore.textContent = showAllTracks ? 'Show Less' : `Show All (${tracks.length - 8} more)`;
+    btnLoadMore.textContent = `Load More (${tracksTotal - tracks.length} remaining)`;
   } else {
     btnLoadMore.style.display = 'none';
   }
 }
 
 btnLoadMore.onclick = () => {
-  showAllTracks = !showAllTracks;
-  renderTracks();
+  tracksOffset += tracksLimit;
+  loadLibrary(true);
 };
 
-function loadLibrary(){
-  fetch('/api/mp3').then(r=>r.json()).then(d=>{
-    tracks = d;
-    libCount.textContent = d.length + ' tracks';
-    renderTracks();
-  }).catch(()=>{
-    trackList.innerHTML = '<div class="msg">Failed to read audio files.</div>';
-  });
+function loadLibrary(append = false){
+  if(!append){
+    tracksOffset = 0;
+    tracks = [];
+    trackList.innerHTML = '<div class="msg">Reading library...</div>';
+  }
+  fetch(`/api/mp3?offset=${tracksOffset}&limit=${tracksLimit}`)
+    .then(r => r.json())
+    .then(d => {
+      const entries = d.entries || (Array.isArray(d) ? d : []);
+      tracks = append ? tracks.concat(entries) : entries;
+      tracksTotal = typeof d.total === 'number' ? d.total : tracks.length;
+      tracksHasMore = !!d.hasMore;
+      libCount.textContent = tracksTotal + ' tracks';
+      renderTracks();
+    }).catch(() => {
+      trackList.innerHTML = '<div class="msg">Failed to read audio files.</div>';
+    });
 }
 
 function openTrackDrawer(t){
@@ -471,8 +489,8 @@ btnSidebarDelete.onclick = () => {
       } else {
         showToast('File deleted', 'success');
         closeAllDrawers();
-        loadLibrary();
-        if(viewFiles.classList.contains('active')) loadFolder(currentFolder);
+        loadLibrary(false);
+        if(viewFiles.classList.contains('active')) loadFolder(currentFolder, false);
       }
     }).catch(e => {
       showToast('Delete error: ' + (e.message || 'request failed'));
@@ -700,7 +718,7 @@ function renderBreadcrumbs(){
   const root = document.createElement('span');
   root.className = 'bc-item';
   root.textContent = 'root';
-  root.onclick = () => loadFolder('/');
+  root.onclick = () => loadFolder('/', false);
   fileBreadcrumbs.appendChild(root);
 
   if(currentFolder === '/') return;
@@ -714,22 +732,29 @@ function renderBreadcrumbs(){
     item.className = 'bc-item';
     item.textContent = seg;
     const dest = built;
-    item.onclick = () => loadFolder(dest);
+    item.onclick = () => loadFolder(dest, false);
     fileBreadcrumbs.appendChild(slash);
     fileBreadcrumbs.appendChild(item);
   });
 }
 
-function loadFolder(path){
+function loadFolder(path, append = false){
   currentFolder = path;
   renderBreadcrumbs();
-  browserFileList.innerHTML = '<div class="msg">Loading files...</div>';
-  fetch('/api/tree?path=' + encodeURIComponent(path))
+  if(!append){
+    filesOffset = 0;
+    browserFileList.innerHTML = '<div class="msg">Loading files...</div>';
+  }
+  fetch(`/api/tree?path=${encodeURIComponent(path)}&offset=${filesOffset}&limit=${filesLimit}`)
     .then(r => r.json())
-    .then(nodes => {
-      browserFileList.innerHTML = '';
-      if(!nodes.length){
+    .then(d => {
+      if(!append) browserFileList.innerHTML = '';
+      const nodes = d.entries || (Array.isArray(d) ? d : []);
+      filesHasMore = !!d.hasMore;
+
+      if(!nodes.length && !append){
         browserFileList.innerHTML = '<div class="msg">Folder is empty.</div>';
+        btnFilesLoadMore.style.display = 'none';
         return;
       }
       nodes.sort((a,b) => (b.type === 'dir') - (a.type === 'dir'));
@@ -757,12 +782,12 @@ function loadFolder(path){
           if(!confirm('Delete ' + targetType + ' ' + full + '?')) return;
           fetch('/api/delete?path=' + encodeURIComponent(full), { method: 'DELETE' })
             .then(async r => {
-              const d = await r.json().catch(() => ({}));
-              if(!r.ok || d.status !== 'ok'){
-                showToast(d.error || 'Failed to delete item');
+              const res = await r.json().catch(() => ({}));
+              if(!r.ok || res.status !== 'ok'){
+                showToast(res.error || 'Failed to delete item');
               } else {
                 showToast('Deleted ' + n.name, 'success');
-                loadFolder(currentFolder);
+                loadFolder(currentFolder, false);
               }
             }).catch(err => {
               showToast('Delete error: ' + (err.message || 'connection failed'));
@@ -772,7 +797,7 @@ function loadFolder(path){
 
         row.onclick = () => {
           if(n.type === 'dir'){
-            loadFolder(full);
+            loadFolder(full, false);
           } else if(n.name.toLowerCase().endsWith('.mp3')){
             openTrackDrawer({ name: n.name, path: full, size: n.size });
           }
@@ -783,8 +808,15 @@ function loadFolder(path){
         row.appendChild(actions);
         browserFileList.appendChild(row);
       });
+
+      btnFilesLoadMore.style.display = filesHasMore ? 'block' : 'none';
     }).catch(()=>{ browserFileList.innerHTML = '<div class="msg">Error reading directory.</div>'; });
 }
+
+btnFilesLoadMore.onclick = () => {
+  filesOffset += filesLimit;
+  loadFolder(currentFolder, true);
+};
 
 btnNewFolder.onclick = () => {
   newFolderForm.style.display = 'flex';
@@ -807,7 +839,7 @@ btnConfirmNewFolder.onclick = () => {
     } else {
       showToast('Folder created', 'success');
       newFolderForm.style.display = 'none';
-      loadFolder(currentFolder);
+      loadFolder(currentFolder, false);
     }
   }).catch(e => {
     showToast('Network error: ' + (e.message || 'could not create folder'));
@@ -818,8 +850,8 @@ btnUp.onclick = () => fileInput.click();
 fileInput.onchange = () => {
   if(!fileInput.files || fileInput.files.length === 0) return;
   const file = fileInput.files[0];
-  if(file.size > 10485760){
-    showToast('Exceeds 10MB limit.');
+  if(file.size > 104857600){
+    showToast('Exceeds 100MB limit.');
     fileInput.value = '';
     return;
   }
@@ -843,8 +875,8 @@ fileInput.onchange = () => {
     fileInput.value = '';
     if(xhr.status >= 200 && xhr.status < 300){
       showToast('File uploaded successfully', 'success');
-      loadFolder(currentFolder);
-      loadLibrary();
+      loadFolder(currentFolder, false);
+      loadLibrary(false);
     } else {
       let msg = 'Upload failed (' + xhr.status + ')';
       try {
@@ -852,7 +884,7 @@ fileInput.onchange = () => {
         if(res.error) msg = 'Upload error: ' + res.error;
       } catch(_) {}
       showToast(msg);
-      loadFolder(currentFolder);
+      loadFolder(currentFolder, false);
     }
   };
   xhr.onerror = () => {
@@ -966,7 +998,7 @@ function renderDiscs(){
 }
 
 function openMapModal(uid, type = 'track', target = '', label = ''){
-  if(!tracks.length) loadLibrary();
+  if(!tracks.length) loadLibrary(false);
   if(!playlists.length) loadPlaylists();
 
   modalUidVal.textContent = uid;
@@ -1035,7 +1067,7 @@ btnModalSave.onclick = () => {
 
 switchView(getQueryTab(), false);
 fetchNow();
-loadLibrary();
+loadLibrary(false);
 loadPlaylists();
 loadDiscs();
 )JS";
